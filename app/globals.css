@@ -166,6 +166,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .profile-popover { width: 210px; }
 .profile-popover span { display: block; margin-bottom: 10px; }
 .profile-popover button { display: block; width: 100%; margin: 0; padding: 8px 0; border-top: 1px solid var(--line); color: #abb6c0; text-align: left; }
+.profile-popover a { display: block; width: 100%; padding: 8px 0; border-top: 1px solid var(--line); color: var(--green); font-size: 11px; text-decoration: none; }
 .mobile-menu { display: none; }
 
 main { width: min(1500px, 100%); margin: 0 auto; padding: 32px clamp(22px, 3vw, 43px) 54px; }
@@ -233,7 +234,8 @@ main { width: min(1500px, 100%); margin: 0 auto; padding: 32px clamp(22px, 3vw, 
 .severity-low { border-color: rgba(98,230,173,.2); background: var(--green-soft); color: var(--green); }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
 .status-validated, .status-completed, .status-healthy, .status-enforced, .status-private { border-color: rgba(98,230,173,.16); background: var(--green-soft); color: var(--green); }
-.status-inferred, .status-running, .status-internet { border-color: rgba(244,184,74,.18); background: var(--amber-soft); color: var(--amber); }
+.status-inferred, .status-running, .status-internet, .status-awaiting-approval { border-color: rgba(244,184,74,.18); background: var(--amber-soft); color: var(--amber); }
+.status-planned { border-color: rgba(117,167,255,.16); background: var(--blue-soft); color: var(--blue); }
 .status-mitigated { border-color: rgba(117,167,255,.16); background: var(--blue-soft); color: var(--blue); }
 .status-stopped, .status-attention, .status-cross-account { border-color: rgba(255,107,107,.16); background: var(--red-soft); color: #ff8585; }
 

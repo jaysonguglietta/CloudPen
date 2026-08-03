@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
+import { configuredOrigin } from "../lib/security/runtime";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,14 +14,13 @@ const geistMono = Geist_Mono({
 });
 
 export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  const socialImage = `${protocol}://${host}/og.png`;
+  const origin = configuredOrigin();
+  const socialImage = `${origin}/og.png`;
   const title = "CloudPen — Cloud Attack Path Validation";
   const description = "Safely prove exploitable cloud identity paths, capture evidence, and verify remediation.";
 
   return {
+    metadataBase: new URL(origin),
     title,
     description,
     openGraph: {

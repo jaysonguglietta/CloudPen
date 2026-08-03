@@ -52,7 +52,7 @@ export type ValidationRun = {
   id: string;
   name: string;
   mode: "Read-only" | "Active canary";
-  status: "Completed" | "Running" | "Stopped";
+  status: "Completed" | "Running" | "Stopped" | "Planned" | "Awaiting approval";
   pathCount: number;
   findings: number;
   requestedBy: string;
@@ -273,10 +273,10 @@ export const assets: CloudAsset[] = [
 ];
 
 export const initialRuns: ValidationRun[] = [
-  { id: "RUN-0291", name: "Weekly production identity validation", mode: "Read-only", status: "Completed", pathCount: 14, findings: 2, requestedBy: "Maya Chen", started: "Today, 09:12", duration: "8m 42s" },
-  { id: "RUN-0287", name: "Vendor trust retest", mode: "Active canary", status: "Completed", pathCount: 3, findings: 1, requestedBy: "Noah Williams", started: "Yesterday, 14:30", duration: "4m 18s" },
-  { id: "RUN-0278", name: "July remediation verification", mode: "Read-only", status: "Completed", pathCount: 8, findings: 0, requestedBy: "Maya Chen", started: "Jul 29, 11:05", duration: "6m 09s" },
-  { id: "RUN-0269", name: "Sandbox active validation", mode: "Active canary", status: "Stopped", pathCount: 2, findings: 0, requestedBy: "Eli Brooks", started: "Jul 26, 16:44", duration: "1m 51s" },
+  { id: "RUN-0291", name: "Weekly production identity validation", mode: "Read-only", status: "Completed", pathCount: 14, findings: 2, requestedBy: "Sample operator", started: "Today, 09:12", duration: "8m 42s" },
+  { id: "RUN-0287", name: "Vendor trust retest", mode: "Active canary", status: "Completed", pathCount: 3, findings: 1, requestedBy: "Sample reviewer", started: "Yesterday, 14:30", duration: "4m 18s" },
+  { id: "RUN-0278", name: "July remediation verification", mode: "Read-only", status: "Completed", pathCount: 8, findings: 0, requestedBy: "Sample operator", started: "Jul 29, 11:05", duration: "6m 09s" },
+  { id: "RUN-0269", name: "Sandbox active validation", mode: "Active canary", status: "Stopped", pathCount: 2, findings: 0, requestedBy: "Sample operator", started: "Jul 26, 16:44", duration: "1m 51s" },
 ];
 
 export const severityRank: Record<Severity, number> = {

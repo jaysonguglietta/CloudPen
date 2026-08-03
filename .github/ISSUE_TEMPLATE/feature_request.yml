@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a product or engineering improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or security problem should be solved?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior, not only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy considerations
+      description: Identify roles, trust boundaries, data, egress, credentials, cloud actions, and abuse cases affected.
+    validations:
+      required: true
+  - type: checkboxes
+    id: runner
+    attributes:
+      label: Execution boundary
+      options:
+        - label: I understand that real cloud execution requires the mandatory runner security gates and cannot be added directly to the web control plane.
+          required: true

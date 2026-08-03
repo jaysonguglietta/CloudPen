@@ -1,0 +1,11 @@
+* @jaysonguglietta
+
+/.github/ @jaysonguglietta
+/SECURITY.md @jaysonguglietta
+/docs/security-review.md @jaysonguglietta
+/docs/runner-security-design.md @jaysonguglietta
+/db/ @jaysonguglietta
+/drizzle/ @jaysonguglietta
+/lib/security/ @jaysonguglietta
+/lib/server/ @jaysonguglietta
+/worker/ @jaysonguglietta
