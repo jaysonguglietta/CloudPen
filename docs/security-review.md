@@ -7,7 +7,7 @@
 
 ## 1. Executive summary
 
-CloudPen now has a defensible fail-closed control-plane foundation for synthetic evaluation. Identity, roles, exposure snapshots, connectors, plan/approval decisions, evidence manifests, screenshot metadata, remediation, pending runner enrollment, guardrails, rate limits, and audit events are server-owned in D1; private screenshot bytes are stored in R2. Mutations enforce same-origin bounded JSON or purpose-specific multipart input; plans, generated evidence, policies, and reports carry integrity envelopes; core guardrails cannot be disabled; and discovery/runner records are database-constrained to non-executable state.
+CloudPen now has a defensible fail-closed control-plane foundation for synthetic evaluation. Identity, roles, exposure snapshots, connectors, plan/approval decisions, evidence manifests, remediation, pending runner enrollment, guardrails, rate limits, and audit events are server-owned in D1. Mutations enforce same-origin bounded JSON input; plans, generated evidence, policies, and reports carry integrity envelopes; core guardrails cannot be disabled; and discovery/runner records are database-constrained to non-executable state.
 
 No confirmed remote code execution, injection, SSRF, XSS, credential leakage, authentication bypass through the supported Sites path, or real cloud data exposure was found in the hardened version. The most important security property is absence: there is no AWS credential flow, runner protocol, or API execution capability.
 
@@ -20,10 +20,9 @@ The system is not production-ready for real tenants or penetration testing. Its 
 - User identity, role assignment, and authorization decisions
 - Validation plan scope, guardrails, signature, expiry, and status
 - Evidence observations and integrity metadata
-- User-captured screenshot PNGs, control mappings, filenames, digests, and collector attribution
 - Audit attribution and hash-chain continuity
 - AWS account identifiers and External ID digests in connector events
-- D1 data, private R2 objects, and the plan-signing secret
+- D1 data and the plan-signing secret
 - Source, lockfile, CI workflow, migration, and deployment configuration
 
 ### Entry points
@@ -33,7 +32,6 @@ The system is not production-ready for real tenants or penetration testing. Its 
 - `GET/PATCH /api/guardrails`
 - `POST /api/connectors`
 - `GET /api/evidence/{pathId}`
-- `GET/POST /api/screenshots` and `GET /api/screenshots/{screenshotId}/content`
 - `GET /api/control-plane`, signed report/policy exports, remediation, discovery-plan, and runner-enrollment routes
 - `/_vinext/image`
 - Local Wrangler service on `127.0.0.1:8787`
@@ -44,7 +42,7 @@ The system is not production-ready for real tenants or penetration testing. Its 
 
 - HTTP methods, paths, query strings, headers, Origin, content type, content length, and bodies
 - Browser state, JavaScript execution, timing, retries, concurrency, and UI manipulation
-- Path IDs, validation mode, acknowledgement, connector name/account/External ID, guardrail property, screenshot bytes, capture metadata, framework/control selection, filename, notes, and client timestamp
+- Path IDs, validation mode, acknowledgement, connector name/account/External ID, and guardrail property
 - Dependency and source contributions
 - Local processes able to reach loopback
 
@@ -86,12 +84,10 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 | --- | --- | --- |
 | Page authentication | Sites identity, server redirect, application allowlist | Header provenance requires dispatcher isolation |
 | RBAC | Server capability matrix in every API | Static environment lists lack lifecycle automation |
-| Mutations | Exact Origin, Fetch Metadata, bounded JSON or screenshot multipart media types, field validation | No general API client authentication model by design |
-| Screenshot upload | Exact Origin, role capability, multipart/PNG size and dimension bounds, catalog validation, server-derived object key, SHA-256, private R2 | Client-generated pixels and banner are not source-attested; sensitive content and misleading evidence remain possible |
+| Mutations | Exact Origin, Fetch Metadata, bounded JSON media type, field validation | No general API client authentication model by design |
 | D1 | Prepared statements, workspace predicates, constraints, indexes | One configured organization and admin-level tampering remain |
 | Plan creation | Server timestamps/status, enforced policy, expiry, digest/HMAC, non-executable | HMAC shared secret and no verifier/runner protocol |
 | Evidence | Server-generated, redacted fields, signed, non-cacheable, manifest-retained, audited | Synthetic only; retention and asymmetric verification absent |
-| Screenshot evidence | Workspace-scoped D1 metadata, private R2, authenticated non-cacheable read, audited creation | May contain real sensitive data; no redaction, approval, retention, or independent capture attestation |
 | Approval | Distinct reviewer/admin, required reason, expiry, audited transition | Approved intent remains non-executable; no step-up or nonce protocol |
 | Discovery/runner staging | Service allowlist, pinned fingerprint, database `executable = 0` | No ownership proof, workload identity, delivery, or collector exists |
 | Audit | Application append-only hash chain, branch-prevention index | No external anchor; DB admin can rewrite full chain |
@@ -279,25 +275,6 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 
 **CWE/OWASP:** CWE-266; OWASP A01/A07.
 
-### SR-10 — Screenshot pixels and visible banner are client-generated and not source-attested
-
-- **Severity:** Medium when screenshots are used as formal audit evidence
-- **Confidence:** High
-- **Affected:** `app/cloudpen-dashboard.tsx`, `app/api/screenshots/route.ts`, `lib/server/control-plane.ts`
-- **Status:** Confirmed evidence-provenance limitation
-
-**Description:** The browser uses `getDisplayMedia`, draws the selected frame and banner to canvas, then uploads a PNG. The server validates authorization, catalog metadata, media signature, size, dimensions, timestamp window, and digest, but it cannot prove that the pixels came from the browser picker, that the banner matches the selected metadata, or that the image was not composed before upload. A user with `capture` capability can call the multipart endpoint directly with any valid PNG.
-
-**Exploitation scenario:** A malicious or compromised authorized reviewer creates a fabricated control screenshot, supplies a plausible title/control/timestamp, and presents the resulting audited D1/R2 record as proof that a control operated. SHA-256 protects the stored bytes after upload; it does not attest their truth at capture time.
-
-**Impact:** False compliance evidence, audit deception, and incorrect control conclusions. This does not grant application or cloud privilege by itself.
-
-**Recommended fix:** Treat screenshots as collector-submitted evidence, not automatically verified evidence. Add an independent reviewer approval state and evidence assertions, render or verify the banner server-side, record capture client/version and immutable receipt, and use a trusted desktop/runner capture agent with device identity and asymmetric attestation if source provenance is required. Preserve the original object and maintain a derived-display copy rather than silently rewriting evidence.
-
-**Validation:** Attempt direct API upload of a synthetic but valid PNG and confirm it is labeled unreviewed. Test that approval requires a distinct identity, metadata edits create new revisions, and any server-rendered banner exactly matches immutable D1 fields. For an attested agent, test nonce, device key, freshness, and replay rejection.
-
-**CWE/OWASP:** CWE-345; OWASP A04 Insecure Design.
-
 ## 6. Exploitation chains and combined risk
 
 ### Direct-origin exposure to administrator impersonation
@@ -318,7 +295,7 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ## 7. Dependency and configuration risks
 
-- The production dependency audit reports zero known vulnerabilities at the current validation. The full development audit reports two high-severity infinite-loop advisories in `image-size@2.0.2`, introduced only through the Vinext build tool. Upstream lists no patched `image-size` release as of August 11, 2026. The package is not imported by application code or included in `dist/server`; screenshot handling uses a bounded manual PNG signature/IHDR parser. A tested Vinext 0.0.45 downgrade removed the dependency but crashed the built Worker during stateful API traffic, so it was rejected. Treat repository image inputs as untrusted, keep the package out of the deployed artifact, monitor upstream, and upgrade as soon as Vinext can remove or patch it.
+- The production dependency audit reports zero known vulnerabilities at the current validation. The full development audit reports two high-severity infinite-loop advisories in `image-size@2.0.2`, introduced only through the Vinext build tool. Upstream lists no patched `image-size` release as of August 11, 2026. The package is not imported by application code or included in `dist/server`. A tested Vinext 0.0.45 downgrade removed the dependency but crashed the built Worker during stateful API traffic, so it was rejected. Treat repository image inputs as untrusted, keep the package out of the deployed artifact, monitor upstream, and upgrade as soon as Vinext can remove or patch it.
 - The lockfile is required. Do not publish installs produced without it.
 - CI actions are pinned to full SHAs and use read-only repository permissions.
 - Package install scripts remain a supply-chain execution surface; use trusted registries, review lockfile diffs, preserve provenance/SBOMs, and consider a package-install allowlist.
@@ -412,7 +389,7 @@ Current tests cover identity redirect, authorized rendering, response headers, H
 - What are the recovery objectives, backup custody, SIEM, and incident-notification requirements?
 - Which independent assessor and launch criteria will approve the first runner pilot?
 
-Assumptions for this review: the exposure snapshot and generated attack-path evidence remain synthetic; screenshot evidence may contain real sensitive information; access remains local or private Sites; the Sites dispatcher is trusted; pending runner enrollment has no communication channel or cloud credentials; and no other services write the D1 or R2 records.
+Assumptions for this review: the exposure snapshot and generated attack-path evidence remain synthetic; access remains local or private Sites; the Sites dispatcher is trusted; pending runner enrollment has no communication channel or cloud credentials; and no other services write the D1 records.
 
 ## Remediated findings from the prototype baseline
 
@@ -420,7 +397,7 @@ The following previously confirmed issues are fixed in the current working tree:
 
 - missing application authentication/RBAC;
 - client-only validation approval and execution simulation;
-- forgeable localStorage run history and browser-authoritative validation evidence (user-submitted screenshots remain explicitly unverified collector evidence under SR-10);
+- forgeable localStorage run history and browser-authoritative validation evidence;
 - known dependency advisories present in the earlier lockfile;
 - missing primary response security headers;
 - local service bound to all interfaces;

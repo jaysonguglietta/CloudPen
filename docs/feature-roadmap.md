@@ -12,7 +12,6 @@ This document tracks the implementation sequence without confusing administrativ
 - Durable AWS connector records that retain only an External ID digest and hint.
 - Non-executable metadata-read-only discovery plans.
 - Evidence manifests, signed evidence downloads, audit-chain viewer, and chain verification.
-- Authorized one-frame screenshot capture with control-dependent framework selectors, visible control banners, normalized names/folders, private R2 storage, D1 metadata, and searchable evidence cards.
 - Owned, due-dated remediation records with risk acceptance and revalidation states.
 - Signed assessment and guardrail exports.
 - Pending runner-enrollment records pinned to a SHA-256 public-key fingerprint.
@@ -31,10 +30,6 @@ All product records and queries carry the configured `workspace_id`; request bod
 ### Reporting and integrations
 
 Signed JSON assessment export is available. PDF generation, Jira/GitHub routing, SIEM delivery, webhooks, SLA notifications, and scheduled revalidation remain outside the current outbound-network boundary.
-
-### Compliance evidence catalogs
-
-Screenshot collection includes curated HIPAA, PCI DSS, FedRAMP/NIST, SOC 2, ISO 27001, and NIST CSF references. Full authoritative catalogs, OSCAL import, organization-defined controls, evidence approval, automated redaction, retention policies, and bulk audit packages remain future work.
 
 ### AI analyst
 

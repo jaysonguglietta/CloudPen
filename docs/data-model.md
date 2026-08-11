@@ -1,6 +1,6 @@
 # Data model
 
-CloudPen stores control-plane and exposure-snapshot metadata in D1 and screenshot PNG bytes in private R2. The authoritative D1 schema is declared in `db/schema.ts`; migrations upgrade the baseline without discarding existing plans.
+CloudPen stores control-plane and exposure-snapshot metadata in D1. The authoritative schema is declared in `db/schema.ts`; migrations upgrade the baseline without discarding existing plans.
 
 ```mermaid
 erDiagram
@@ -9,7 +9,6 @@ erDiagram
   WORKSPACES ||--o{ VALIDATION_RUNS : owns
   WORKSPACES ||--o{ CONNECTORS : owns
   WORKSPACES ||--o{ EVIDENCE_PACKAGES : retains
-  WORKSPACES ||--o{ SCREENSHOT_EVIDENCE : indexes
   WORKSPACES ||--o{ REMEDIATIONS : tracks
   WORKSPACES ||--o{ RUNNER_ENROLLMENTS : stages
   WORKSPACES ||--o{ EXPOSURE_SNAPSHOTS : collects
@@ -70,25 +69,6 @@ erDiagram
     text event_hash
     text created_at
   }
-  SCREENSHOT_EVIDENCE {
-    text id PK
-    text workspace_id
-    text framework_id
-    text control_id
-    text stored_filename
-    text object_key
-    text folder_path
-    text banner_position
-    boolean include_timestamp
-    boolean include_actor
-    text captured_at
-    integer width
-    integer height
-    integer size_bytes
-    text sha256_digest
-    text created_by
-    text created_at
-  }
   RATE_LIMITS {
     text key PK
     integer count
@@ -129,10 +109,6 @@ Stores server-issued plans and integrity data. Control-plane transitions include
 - `discovery_jobs` stores read-only AWS metadata scope with a database check forcing `executable = 0`.
 - `runner_enrollments` pins a reviewed public-key fingerprint in `Pending` or `Disabled` state, also with database-enforced `executable = 0`.
 
-### `screenshot_evidence`
-
-Indexes one privately stored PNG with a server-derived object key, framework/control mapping, generated filename and logical folder, banner settings, client capture time, dimensions, byte size, SHA-256 digest, and actor attribution. The image body is not stored in D1. Reads always resolve the object key through a workspace-scoped row, and the R2 bucket is not public.
-
 ### Exposure graph tables
 
 - `exposure_snapshots` identifies the collection source, status, and timestamp.
@@ -159,8 +135,6 @@ Stores per-identity counters and Unix expiry timestamps. Keys include the operat
 | Signing key | Secret | Environment secret only; never stored in D1 or returned |
 | Plan digest and HMAC | Integrity metadata | Stored and returned in plan receipt |
 | Evidence observations | Synthetic confidential sample | Returned in a signed, non-cacheable download |
-| Screenshot PNG | Potentially sensitive compliance evidence | Private R2 object; authenticated non-cacheable application read; 12 MiB and 60 MP bounds |
-| Screenshot control metadata | Confidential tenant metadata | Workspace-scoped D1 row with generated path and SHA-256 digest |
 | Cloud topology | Synthetic sample | Seeded into D1 and server-delivered with explicit demo provenance |
 
 ## Retention

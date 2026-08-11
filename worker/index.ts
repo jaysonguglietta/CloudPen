@@ -6,7 +6,6 @@ import { installRuntimeBindings, type RuntimeBindings } from "../lib/security/ru
 interface Env extends RuntimeBindings {
   ASSETS: Fetcher;
   DB?: D1Database;
-  EVIDENCE?: R2Bucket;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {

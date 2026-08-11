@@ -8,9 +8,9 @@ export type AuthorizedUser = ChatGPTUser & {
 };
 
 const roleCapabilities: Record<CloudPenRole, ReadonlySet<string>> = {
-  admin: new Set(["read", "plan", "approve", "configure", "connect", "enroll", "capture"]),
-  operator: new Set(["read", "plan", "connect", "capture"]),
-  reviewer: new Set(["read", "approve", "capture"]),
+  admin: new Set(["read", "plan", "approve", "configure", "connect", "enroll"]),
+  operator: new Set(["read", "plan", "connect"]),
+  reviewer: new Set(["read", "approve"]),
   viewer: new Set(["read"]),
 };
 

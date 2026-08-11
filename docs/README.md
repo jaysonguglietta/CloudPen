@@ -8,7 +8,6 @@ This directory is the source of truth for the current CloudPen control-plane pro
 | --- | --- | --- |
 | Product and security leaders | [Architecture](./architecture.md) | Scope, trust boundaries, and what is deliberately unavailable |
 | Application engineers | [API reference](./api.md) | Routes, roles, validation, and response contracts |
-| Compliance evidence owners | [Screenshot evidence](./screenshot-evidence.md) | Capture, naming, control mapping, retrieval, and privacy behavior |
 | Security reviewers | [Security review](./security-review.md) | Threat model, findings, mitigations, and residual risk |
 | Operators | [Deployment](./deployment.md) and [Operations](./operations.md) | Safe configuration, startup, monitoring, incidents, and recovery |
 | Runner engineers | [Runner security design](./runner-security-design.md) | Mandatory controls before any AWS action is enabled |
@@ -20,7 +19,6 @@ This directory is the source of truth for the current CloudPen control-plane pro
 - [Architecture and trust boundaries](./architecture.md)
 - [Data model](./data-model.md)
 - [API reference](./api.md)
-- [Screenshot evidence workflow](./screenshot-evidence.md)
 - [Adversarial security review](./security-review.md)
 - [Configuration and deployment](./deployment.md)
 - [Operations and incident response](./operations.md)

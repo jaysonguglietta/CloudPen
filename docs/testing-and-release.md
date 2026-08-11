@@ -41,7 +41,6 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 - connector durability, External ID non-disclosure, and non-executable discovery plans;
 - requester/approver separation and approved intent remaining non-executable;
 - evidence-manifest retention and remediation state transitions;
-- control-mapped screenshot upload, normalized folder/filename generation, private R2 retrieval, digest metadata, and non-cacheable MIME handling;
 - pending runner enrollment constrained to `executable: false`;
 - signed assessment export and audit-chain verification.
 
@@ -62,7 +61,6 @@ Automation does not replace review. Before a hosted release, confirm:
 - [ ] A unique production signing key is stored as a secret.
 - [ ] `CLOUDPEN_LOCAL_MODE` is absent.
 - [ ] D1 migration and runtime initialization match.
-- [ ] R2 evidence binding is private and lifecycle/retention policy matches the approved evidence policy.
 - [ ] Every new mutation has capability, origin, body, validation, rate-limit, error, and audit controls.
 - [ ] Security headers still allow the app to function without widening sources unnecessarily.
 - [ ] Production dependency audit is clean; every full-audit exception is documented with reachability, upstream status, and compensating controls.
@@ -79,7 +77,6 @@ Automation does not replace review. Before a hosted release, confirm:
 - Load and abuse testing for large authenticated request volumes.
 - Browser CSP regression testing with nonce-based policy.
 - Privacy review of topology and evidence fields.
-- Browser screen-picker cancellation/denial, one-frame track shutdown, banner layout at common display resolutions, and screenshot accessibility/manual workflow testing.
 
 ## Additional tests required before a runner
 

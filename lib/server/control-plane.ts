@@ -11,10 +11,8 @@ import {
   type AttackPath,
   type RemediationRecord,
   type RunnerRecord,
-  type ScreenshotEvidenceRecord,
   type ValidationRun,
 } from "../cloudpen-data";
-import { controlById, controlFolderSegment, frameworkById, screenshotFilename } from "../compliance-controls";
 import type { AuthorizedUser } from "../security/authorization";
 import { runtimeBindings, signingKey } from "../security/runtime";
 
@@ -374,159 +372,6 @@ export async function createAssessmentReport(user: AuthorizedUser) {
   return { payload, integrity };
 }
 
-export async function listScreenshotEvidence(
-  user: AuthorizedUser,
-  filters: { frameworkId?: string; controlId?: string; query?: string },
-): Promise<ScreenshotEvidenceRecord[]> {
-  const db = database();
-  await initializeControlPlane(db, user);
-  await enforceRateLimit(db, `screenshot-read:${user.email.toLowerCase()}`, 120, 60);
-  const frameworkId = filters.frameworkId?.trim() ?? "";
-  const controlId = filters.controlId?.trim() ?? "";
-  const query = filters.query?.trim().toLowerCase() ?? "";
-  if (frameworkId && !frameworkById(frameworkId)) throw new ValidationError("Unknown compliance framework.");
-  if (controlId && (!frameworkId || !controlById(frameworkId, controlId))) throw new ValidationError("Unknown compliance control.");
-  if (query.length > 100) throw new ValidationError("Screenshot search is limited to 100 characters.");
-  const escapedQuery = `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-  const rows = await db.prepare(`SELECT id, framework_id, framework_label, control_id, control_label, title, notes,
-      stored_filename, folder_path, banner_position, include_timestamp, include_actor, captured_at,
-      width, height, size_bytes, sha256_digest, created_by, created_at
-    FROM screenshot_evidence
-    WHERE workspace_id = ?
-      AND (? = '' OR framework_id = ?)
-      AND (? = '' OR control_id = ?)
-      AND (? = '' OR lower(title) LIKE ? ESCAPE '\\' OR lower(stored_filename) LIKE ? ESCAPE '\\'
-        OR lower(notes) LIKE ? ESCAPE '\\' OR lower(control_label) LIKE ? ESCAPE '\\')
-    ORDER BY created_at DESC LIMIT 100`)
-    .bind(WORKSPACE_ID, frameworkId, frameworkId, controlId, controlId, query, escapedQuery, escapedQuery, escapedQuery, escapedQuery)
-    .all<Record<string, unknown>>();
-  return rows.results.map(screenshotRecordFromRow);
-}
-
-export async function createScreenshotEvidence(
-  user: AuthorizedUser,
-  input: {
-    frameworkId: string;
-    controlId: string;
-    title: string;
-    notes: string;
-    customName: string;
-    bannerPosition: "top" | "bottom";
-    includeTimestamp: boolean;
-    includeActor: boolean;
-    capturedAt: string;
-  },
-  bytes: Uint8Array,
-): Promise<ScreenshotEvidenceRecord> {
-  const db = database();
-  await initializeControlPlane(db, user);
-  await enforceRateLimit(db, `screenshot-create:${user.email.toLowerCase()}`, 20, 600);
-  const bucket = evidenceBucket();
-  const framework = frameworkById(input.frameworkId);
-  const control = controlById(input.frameworkId, input.controlId);
-  if (!framework || !control) throw new ValidationError("A supported compliance framework and control are required.");
-  if (input.title.trim().length < 2 || input.title.trim().length > 120) throw new ValidationError("Evidence title must be 2–120 characters.");
-  if (input.notes.trim().length > 500) throw new ValidationError("Evidence notes are limited to 500 characters.");
-  if (input.customName.trim().length < 1 || input.customName.trim().length > 80) throw new ValidationError("Custom filename must be 1–80 characters.");
-  if (input.bannerPosition !== "top" && input.bannerPosition !== "bottom") throw new ValidationError("Unsupported banner position.");
-  if (bytes.byteLength < 32 || bytes.byteLength > 12 * 1024 * 1024) throw new ValidationError("Screenshot must be a PNG no larger than 12 MiB.");
-  const dimensions = pngDimensions(bytes);
-  if (!dimensions || dimensions.width > 12000 || dimensions.height > 12000 || dimensions.width * dimensions.height > 60_000_000) {
-    throw new ValidationError("Screenshot PNG dimensions are invalid or exceed the 60-megapixel limit.");
-  }
-  const capturedAt = new Date(input.capturedAt);
-  if (Number.isNaN(capturedAt.valueOf()) || Math.abs(Date.now() - capturedAt.valueOf()) > 10 * 60_000) {
-    throw new ValidationError("Capture timestamp is invalid or outside the allowed clock window.");
-  }
-  const createdAt = new Date().toISOString();
-  const storedFilename = screenshotFilename({
-    frameworkId: framework.id,
-    controlId: control.id,
-    customName: input.customName,
-    capturedAt: capturedAt.toISOString(),
-  });
-  const date = new Date(createdAt);
-  const folderPath = `${framework.id}/${controlFolderSegment(control.id)}/${date.getUTCFullYear()}/${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-  const id = `SCR-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  const objectKey = `${WORKSPACE_ID}/screenshots/${folderPath}/${id.toLowerCase()}--${storedFilename}`;
-  const sha256Digest = await sha256Bytes(bytes);
-  await bucket.put(objectKey, bytes, {
-    httpMetadata: {
-      contentType: "image/png",
-      cacheControl: "private, no-store",
-      contentDisposition: `attachment; filename="${storedFilename}"`,
-    },
-    customMetadata: {
-      framework: framework.id,
-      control: control.id,
-      digest: sha256Digest,
-      capturedBy: user.email.toLowerCase(),
-    },
-  });
-  try {
-    await db.prepare(`INSERT INTO screenshot_evidence
-      (id, workspace_id, framework_id, framework_label, control_id, control_label, title, notes, stored_filename,
-        object_key, folder_path, banner_position, include_timestamp, include_actor, captured_at,
-        width, height, size_bytes, sha256_digest, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, WORKSPACE_ID, framework.id, `${framework.label} ${framework.version}`, control.id, control.title,
-        input.title.trim(), input.notes.trim(), storedFilename, objectKey, folderPath, input.bannerPosition,
-        input.includeTimestamp ? 1 : 0, input.includeActor ? 1 : 0, capturedAt.toISOString(), dimensions.width,
-        dimensions.height, bytes.byteLength, sha256Digest, user.email.toLowerCase(), createdAt)
-      .run();
-    await appendAuditEvent(db, user.email, "screenshot.evidence.created", id, {
-      frameworkId: framework.id,
-      controlId: control.id,
-      folderPath,
-      storedFilename,
-      sha256Digest,
-      sizeBytes: bytes.byteLength,
-    });
-  } catch (error) {
-    await Promise.allSettled([
-      bucket.delete(objectKey),
-      db.prepare("DELETE FROM screenshot_evidence WHERE id = ? AND workspace_id = ?").bind(id, WORKSPACE_ID).run(),
-    ]);
-    throw error;
-  }
-  return {
-    id,
-    frameworkId: framework.id,
-    frameworkLabel: `${framework.label} ${framework.version}`,
-    controlId: control.id,
-    controlLabel: control.title,
-    title: input.title.trim(),
-    notes: input.notes.trim(),
-    storedFilename,
-    folderPath,
-    bannerPosition: input.bannerPosition,
-    includeTimestamp: input.includeTimestamp,
-    includeActor: input.includeActor,
-    capturedAt: capturedAt.toISOString(),
-    width: dimensions.width,
-    height: dimensions.height,
-    sizeBytes: bytes.byteLength,
-    sha256Digest,
-    createdBy: user.email.toLowerCase(),
-    createdAt,
-    contentUrl: `/api/screenshots/${id}/content`,
-    downloadUrl: `/api/screenshots/${id}/content?download=1`,
-  };
-}
-
-export async function getScreenshotEvidenceContent(user: AuthorizedUser, id: string) {
-  const db = database();
-  await initializeControlPlane(db, user);
-  await enforceRateLimit(db, `screenshot-content:${user.email.toLowerCase()}`, 180, 60);
-  const row = await db.prepare(`SELECT object_key, stored_filename, sha256_digest FROM screenshot_evidence
-    WHERE id = ? AND workspace_id = ?`).bind(id, WORKSPACE_ID)
-    .first<{ object_key: string; stored_filename: string; sha256_digest: string }>();
-  if (!row) throw new NotFoundError("Screenshot evidence was not found.");
-  const object = await evidenceBucket().get(row.object_key);
-  if (!object) throw new NotFoundError("Screenshot image is unavailable.");
-  return { object, storedFilename: row.stored_filename, sha256Digest: row.sha256_digest };
-}
-
 export async function decideValidationRun(
   user: AuthorizedUser,
   runId: string,
@@ -634,7 +479,6 @@ async function initializeControlPlane(db: D1Database, user: AuthorizedUser): Pro
     db.prepare("CREATE TABLE IF NOT EXISTS cloud_assets (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, data_json TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS exposure_paths (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, data_json TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS graph_edges (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, source_node TEXT NOT NULL, target_node TEXT NOT NULL, relationship TEXT NOT NULL, evidence_json TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS screenshot_evidence (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, framework_id TEXT NOT NULL, framework_label TEXT NOT NULL, control_id TEXT NOT NULL, control_label TEXT NOT NULL, title TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', stored_filename TEXT NOT NULL, object_key TEXT NOT NULL UNIQUE, folder_path TEXT NOT NULL, banner_position TEXT NOT NULL CHECK (banner_position IN ('top', 'bottom')), include_timestamp INTEGER NOT NULL DEFAULT 1 CHECK (include_timestamp IN (0, 1)), include_actor INTEGER NOT NULL DEFAULT 1 CHECK (include_actor IN (0, 1)), captured_at TEXT NOT NULL, width INTEGER NOT NULL CHECK (width BETWEEN 1 AND 12000), height INTEGER NOT NULL CHECK (height BETWEEN 1 AND 12000), size_bytes INTEGER NOT NULL CHECK (size_bytes BETWEEN 1 AND 12582912), sha256_digest TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, actor_email TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, details_json TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL, created_at TEXT NOT NULL)"),
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS audit_events_chain_link ON audit_events (workspace_id, previous_hash)"),
     db.prepare("CREATE INDEX IF NOT EXISTS validation_runs_workspace_created ON validation_runs (workspace_id, created_at)"),
@@ -645,9 +489,6 @@ async function initializeControlPlane(db: D1Database, user: AuthorizedUser): Pro
     db.prepare("CREATE INDEX IF NOT EXISTS exposure_paths_workspace_snapshot ON exposure_paths (workspace_id, snapshot_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS cloud_assets_workspace_snapshot ON cloud_assets (workspace_id, snapshot_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS graph_edges_workspace_snapshot ON graph_edges (workspace_id, snapshot_id)"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS screenshot_evidence_object_key ON screenshot_evidence (object_key)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS screenshot_evidence_workspace_control_created ON screenshot_evidence (workspace_id, framework_id, control_id, created_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS screenshot_evidence_workspace_created ON screenshot_evidence (workspace_id, created_at)"),
     db.prepare("CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL)"),
   ]);
   await ensureRuntimeSchemaCompatibility(db);
@@ -794,50 +635,6 @@ function database(): D1Database {
   return db;
 }
 
-function evidenceBucket(): R2Bucket {
-  const bucket = runtimeBindings().EVIDENCE;
-  if (!bucket) throw new Error("The private evidence object store is unavailable.");
-  return bucket;
-}
-
-function screenshotRecordFromRow(row: Record<string, unknown>): ScreenshotEvidenceRecord {
-  const id = String(row.id);
-  return {
-    id,
-    frameworkId: String(row.framework_id),
-    frameworkLabel: String(row.framework_label),
-    controlId: String(row.control_id),
-    controlLabel: String(row.control_label),
-    title: String(row.title),
-    notes: String(row.notes),
-    storedFilename: String(row.stored_filename),
-    folderPath: String(row.folder_path),
-    bannerPosition: row.banner_position as "top" | "bottom",
-    includeTimestamp: Number(row.include_timestamp) === 1,
-    includeActor: Number(row.include_actor) === 1,
-    capturedAt: String(row.captured_at),
-    width: Number(row.width),
-    height: Number(row.height),
-    sizeBytes: Number(row.size_bytes),
-    sha256Digest: String(row.sha256_digest),
-    createdBy: String(row.created_by),
-    createdAt: String(row.created_at),
-    contentUrl: `/api/screenshots/${id}/content`,
-    downloadUrl: `/api/screenshots/${id}/content?download=1`,
-  };
-}
-
-function pngDimensions(bytes: Uint8Array): { width: number; height: number } | null {
-  if (bytes.byteLength < 24) return null;
-  const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-  if (!signature.every((value, index) => bytes[index] === value)) return null;
-  if (String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const width = view.getUint32(16, false);
-  const height = view.getUint32(20, false);
-  return width > 0 && height > 0 ? { width, height } : null;
-}
-
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -847,11 +644,6 @@ function canonicalJson(value: unknown): string {
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
-  return toBase64Url(digest);
-}
-
-async function sha256Bytes(value: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", value as BufferSource);
   return toBase64Url(digest);
 }
 

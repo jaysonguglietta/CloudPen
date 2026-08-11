@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 const port = 32000 + (process.pid % 1000);
 const origin = `http://127.0.0.1:${port}`;
@@ -16,6 +16,7 @@ let server;
 let output = "";
 let stateDirectory;
 
+describe("CloudPen built Worker", { concurrency: false }, () => {
 before(async () => {
   stateDirectory = await mkdtemp(join(tmpdir(), "cloudpen-security-tests-"));
   server = spawn("./node_modules/.bin/wrangler", [
@@ -180,48 +181,6 @@ test("returns explicit demo provenance and authoritative empty workflow records"
   assert.ok(Array.isArray(body.evidence));
 });
 
-test("stores and retrieves private control-mapped screenshot evidence", async () => {
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
-  const form = new FormData();
-  form.set("image", new Blob([png], { type: "image/png" }), "capture.png");
-  form.set("frameworkId", "hipaa");
-  form.set("controlId", "164.312(a)(1)");
-  form.set("title", "Privileged access review");
-  form.set("customName", "access review / production");
-  form.set("notes", "Quarterly evidence collection");
-  form.set("bannerPosition", "bottom");
-  form.set("includeTimestamp", "true");
-  form.set("includeActor", "true");
-  form.set("capturedAt", new Date().toISOString());
-  form.set("authorized", "true");
-  const create = await fetch(`${origin}/api/screenshots`, {
-    method: "POST",
-    headers: { ...identityHeaders, origin },
-    body: form,
-  });
-  const raw = await create.text();
-  assert.equal(create.status, 201, raw);
-  const created = JSON.parse(raw).screenshot;
-  assert.match(created.id, /^SCR-[A-F0-9]{8}$/);
-  assert.equal(created.frameworkId, "hipaa");
-  assert.equal(created.controlId, "164.312(a)(1)");
-  assert.match(created.folderPath, /^hipaa\/164\.312-a-1\/\d{4}\/\d{2}$/);
-  assert.match(created.storedFilename, /^HIPAA_164\.312-a-1_\d{8}T\d{6}Z_access-review-production\.png$/);
-
-  const list = await fetch(`${origin}/api/screenshots?framework=hipaa&control=${encodeURIComponent("164.312(a)(1)")}&q=quarterly`, { headers: identityHeaders });
-  const listed = await list.json();
-  assert.equal(list.status, 200);
-  assert.equal(listed.screenshots.length, 1);
-  assert.equal(listed.screenshots[0].sha256Digest.length, 43);
-
-  const content = await fetch(`${origin}${created.contentUrl}`, { headers: identityHeaders });
-  assert.equal(content.status, 200);
-  assert.equal(content.headers.get("content-type"), "image/png");
-  assert.equal(content.headers.get("cache-control"), "no-store, private");
-  assert.equal(content.headers.get("x-content-type-options"), "nosniff");
-  assert.deepEqual(Buffer.from(await content.arrayBuffer()), png);
-});
-
 test("persists connector records without returning the raw external ID", async () => {
   const externalId = "northstar-integration-secret-value";
   const response = await fetch(`${origin}/api/connectors`, {
@@ -342,4 +301,5 @@ test("exports a signed assessment with provenance and no execution authority", a
   assert.equal(body.payload.assurance.executable, false);
   assert.equal(body.payload.assurance.auditChainValid, true);
   assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+});
 });

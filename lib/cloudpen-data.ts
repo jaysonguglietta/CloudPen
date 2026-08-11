@@ -8,7 +8,6 @@ export type ViewKey =
   | "connectors"
   | "remediation"
   | "evidence"
-  | "screenshots"
   | "audit"
   | "reports"
   | "administration"
@@ -139,30 +138,6 @@ export type RunnerRecord = {
   executable: false;
   createdBy: string;
   createdAt: string;
-};
-
-export type ScreenshotEvidenceRecord = {
-  id: string;
-  frameworkId: string;
-  frameworkLabel: string;
-  controlId: string;
-  controlLabel: string;
-  title: string;
-  notes: string;
-  storedFilename: string;
-  folderPath: string;
-  bannerPosition: "top" | "bottom";
-  includeTimestamp: boolean;
-  includeActor: boolean;
-  capturedAt: string;
-  width: number;
-  height: number;
-  sizeBytes: number;
-  sha256Digest: string;
-  createdBy: string;
-  createdAt: string;
-  contentUrl: string;
-  downloadUrl: string;
 };
 
 export type ControlPlaneSnapshot = {

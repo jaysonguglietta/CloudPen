@@ -11,12 +11,10 @@ import type {
   EvidenceRecord,
   RemediationRecord,
   RunnerRecord,
-  ScreenshotEvidenceRecord,
   Severity,
   ValidationRun,
   ViewKey,
 } from "../lib/cloudpen-data";
-import { complianceFrameworks, controlFolderSegment, frameworkById, screenshotFilename } from "../lib/compliance-controls";
 
 const severityRank: Record<Severity, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
 
@@ -27,7 +25,6 @@ const navigation: Array<{ key: ViewKey; label: string; icon: string }> = [
   { key: "runs", label: "Validation runs", icon: "▶" },
   { key: "connectors", label: "Cloud connectors", icon: "⛓" },
   { key: "remediation", label: "Remediation", icon: "✓" },
-  { key: "screenshots", label: "Evidence capture", icon: "▣" },
   { key: "evidence", label: "Evidence & audit", icon: "▤" },
   { key: "reports", label: "Reports", icon: "▥" },
   { key: "administration", label: "Administration", icon: "⚙" },
@@ -65,11 +62,6 @@ const viewTitles: Record<ViewKey, { eyebrow: string; title: string; description:
     title: "Remediation",
     description: "Assign validated root causes, track service levels, and prepare fixes for revalidation.",
   },
-  screenshots: {
-    eyebrow: "Compliance evidence",
-    title: "Screenshot evidence",
-    description: "Capture, stamp, organize, and retrieve screenshots by framework and control reference.",
-  },
   evidence: {
     eyebrow: "Assurance records",
     title: "Evidence & audit",
@@ -99,18 +91,6 @@ const viewTitles: Record<ViewKey, { eyebrow: string; title: string; description:
 
 function initials(value: string): string {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "CP";
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KiB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function fitCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {
-  if (context.measureText(value).width <= maxWidth) return value;
-  let shortened = value;
-  while (shortened.length > 1 && context.measureText(`${shortened}…`).width > maxWidth) shortened = shortened.slice(0, -1);
-  return `${shortened}…`;
 }
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -191,27 +171,10 @@ export default function CloudPenDashboard({
   const [remediations, setRemediations] = useState<RemediationRecord[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditRecord[]>([]);
   const [runners, setRunners] = useState<RunnerRecord[]>([]);
-  const [screenshots, setScreenshots] = useState<ScreenshotEvidenceRecord[]>([]);
-  const [screenshotsLoading, setScreenshotsLoading] = useState(true);
-  const [screenshotFilters, setScreenshotFilters] = useState({ frameworkId: "", controlId: "", query: "" });
-  const [captureForm, setCaptureForm] = useState({
-    frameworkId: complianceFrameworks[0].id,
-    controlId: complianceFrameworks[0].controls[0].id,
-    title: "",
-    customName: "control-evidence",
-    notes: "",
-    bannerPosition: "bottom" as "top" | "bottom",
-    includeTimestamp: true,
-    includeActor: true,
-    downloadCopy: true,
-    authorized: false,
-  });
-  const [captureState, setCaptureState] = useState<"idle" | "choosing" | "uploading">("idle");
-  const [captureError, setCaptureError] = useState("");
   const [auditChainValid, setAuditChainValid] = useState(true);
   const [dataMode, setDataMode] = useState<"demo" | "live">("demo");
   const [loadingControlPlane, setLoadingControlPlane] = useState(true);
-  const [modal, setModal] = useState<"validate" | "connect" | "remediate" | "run" | "capture" | null>(null);
+  const [modal, setModal] = useState<"validate" | "connect" | "remediate" | "run" | null>(null);
   const [selectedRun, setSelectedRun] = useState<ValidationRun | null>(null);
   const [decisionReason, setDecisionReason] = useState("");
   const [validationMode, setValidationMode] = useState<"Read-only" | "Active canary">("Read-only");
@@ -237,7 +200,6 @@ export default function CloudPenDashboard({
   const canConfigure = currentUser.role === "admin";
   const canConnect = currentUser.role === "admin" || currentUser.role === "operator";
   const canApprove = currentUser.role === "admin" || currentUser.role === "reviewer";
-  const canCapture = currentUser.role !== "viewer";
 
   useEffect(() => {
     let cancelled = false;
@@ -266,10 +228,6 @@ export default function CloudPenDashboard({
         }
       });
     return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    void searchScreenshots({ frameworkId: "", controlId: "", query: "" });
   }, []);
 
   useEffect(() => {
@@ -359,143 +317,6 @@ export default function CloudPenDashboard({
     setQuery("");
     setSeverity("All");
     setAccount("All accounts");
-  }
-
-  async function searchScreenshots(filters = screenshotFilters) {
-    setScreenshotsLoading(true);
-    try {
-      const parameters = new URLSearchParams();
-      if (filters.frameworkId) parameters.set("framework", filters.frameworkId);
-      if (filters.controlId) parameters.set("control", filters.controlId);
-      if (filters.query.trim()) parameters.set("q", filters.query.trim());
-      const response = await fetch(`/api/screenshots?${parameters}`, { headers: { accept: "application/json" } });
-      const body = await response.json() as { screenshots?: ScreenshotEvidenceRecord[]; error?: string };
-      if (!response.ok || !body.screenshots) throw new Error(body.error || "Screenshot evidence could not be loaded.");
-      setScreenshots(body.screenshots);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "Screenshot evidence could not be loaded.");
-    } finally {
-      setScreenshotsLoading(false);
-    }
-  }
-
-  function openCapture() {
-    setCaptureError("");
-    setCaptureState("idle");
-    setCaptureForm((current) => ({ ...current, authorized: false }));
-    setModal("capture");
-  }
-
-  async function captureScreenshot(event: React.FormEvent) {
-    event.preventDefault();
-    const framework = frameworkById(captureForm.frameworkId);
-    const control = framework?.controls.find((item) => item.id === captureForm.controlId);
-    if (!framework || !control || captureForm.title.trim().length < 2 || !captureForm.customName.trim() || !captureForm.authorized) {
-      setCaptureError("Choose a framework and control, add a title and filename, and confirm capture authorization.");
-      return;
-    }
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      setCaptureError("Screen capture is unavailable in this browser. Use a current browser on localhost or HTTPS.");
-      return;
-    }
-
-    let stream: MediaStream | null = null;
-    try {
-      setCaptureError("");
-      setCaptureState("choosing");
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const video = document.createElement("video");
-      video.muted = true;
-      video.playsInline = true;
-      video.srcObject = stream;
-      await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error("The selected screen could not be decoded."));
-      });
-      await video.play();
-      const sourceWidth = video.videoWidth;
-      const sourceHeight = video.videoHeight;
-      if (!sourceWidth || !sourceHeight) throw new Error("The selected screen did not provide a usable frame.");
-
-      const bannerHeight = Math.max(70, Math.min(104, Math.round(sourceWidth * 0.055)));
-      const canvas = document.createElement("canvas");
-      canvas.width = sourceWidth;
-      canvas.height = sourceHeight + bannerHeight;
-      const context = canvas.getContext("2d", { alpha: false });
-      if (!context) throw new Error("The screenshot canvas could not be created.");
-      context.fillStyle = "#07110d";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      const imageY = captureForm.bannerPosition === "top" ? bannerHeight : 0;
-      const bannerY = captureForm.bannerPosition === "top" ? 0 : sourceHeight;
-      context.drawImage(video, 0, imageY, sourceWidth, sourceHeight);
-      const gradient = context.createLinearGradient(0, bannerY, sourceWidth, bannerY);
-      gradient.addColorStop(0, "#08120e");
-      gradient.addColorStop(1, "#10231b");
-      context.fillStyle = gradient;
-      context.fillRect(0, bannerY, sourceWidth, bannerHeight);
-      context.fillStyle = "#62e6ad";
-      context.fillRect(0, bannerY, 6, bannerHeight);
-
-      const padding = Math.max(20, Math.round(sourceWidth * 0.018));
-      const primarySize = Math.max(14, Math.min(24, Math.round(sourceWidth / 80)));
-      const secondarySize = Math.max(11, Math.round(primarySize * 0.68));
-      const leftWidth = sourceWidth * 0.62;
-      context.textBaseline = "middle";
-      context.fillStyle = "#f0f4f2";
-      context.font = `700 ${primarySize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      context.fillText(fitCanvasText(context, `${framework.shortLabel} · ${control.id} · ${control.title}`, leftWidth), padding, bannerY + bannerHeight * 0.36);
-      context.fillStyle = "#9db3a8";
-      context.font = `500 ${secondarySize}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      context.fillText(fitCanvasText(context, `${captureForm.title.trim()} · ${captureForm.customName.trim()}.png`, leftWidth), padding, bannerY + bannerHeight * 0.72);
-      const capturedAt = new Date().toISOString();
-      const rightLines = [
-        captureForm.includeTimestamp ? capturedAt : "",
-        captureForm.includeActor ? currentUser.email : "",
-      ].filter(Boolean);
-      context.textAlign = "right";
-      context.fillStyle = "#b9cac1";
-      rightLines.forEach((line, index) => context.fillText(fitCanvasText(context, line, sourceWidth * 0.3), sourceWidth - padding, bannerY + bannerHeight * (rightLines.length === 1 ? 0.53 : 0.36 + index * 0.36)));
-
-      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("The PNG could not be encoded.")), "image/png"));
-      setCaptureState("uploading");
-      const form = new FormData();
-      form.set("image", blob, "capture.png");
-      form.set("frameworkId", framework.id);
-      form.set("controlId", control.id);
-      form.set("title", captureForm.title.trim());
-      form.set("customName", captureForm.customName.trim());
-      form.set("notes", captureForm.notes.trim());
-      form.set("bannerPosition", captureForm.bannerPosition);
-      form.set("includeTimestamp", String(captureForm.includeTimestamp));
-      form.set("includeActor", String(captureForm.includeActor));
-      form.set("capturedAt", capturedAt);
-      form.set("authorized", "true");
-      const response = await fetch("/api/screenshots", { method: "POST", body: form });
-      const body = await response.json() as { screenshot?: ScreenshotEvidenceRecord; error?: string };
-      if (!response.ok || !body.screenshot) throw new Error(body.error || "The screenshot could not be stored.");
-      if (captureForm.downloadCopy) {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = body.screenshot.storedFilename;
-        anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      }
-      setModal(null);
-      setCaptureForm((current) => ({ ...current, title: "", notes: "", authorized: false }));
-      setScreenshotFilters({ frameworkId: framework.id, controlId: control.id, query: "" });
-      await searchScreenshots({ frameworkId: framework.id, controlId: control.id, query: "" });
-      chooseView("screenshots");
-      setToast(`Screenshot stored in ${body.screenshot.folderPath}.`);
-    } catch (error) {
-      const message = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")
-        ? "Capture was cancelled or screen-sharing permission was denied. No image was stored."
-        : error instanceof Error ? error.message : "The screenshot could not be captured.";
-      setCaptureError(message);
-    } finally {
-      stream?.getTracks().forEach((track) => track.stop());
-      setCaptureState("idle");
-    }
   }
 
   function openValidation(pathId = selectedPath.id) {
@@ -989,34 +810,6 @@ export default function CloudPenDashboard({
     );
   }
 
-  function renderScreenshots() {
-    const selectedFilterFramework = frameworkById(screenshotFilters.frameworkId);
-    return (
-      <section className="screenshot-layout">
-        <article className="panel capture-hero">
-          <div><span className="section-kicker">CONTROL-MAPPED CAPTURE</span><h2>Turn a screen state into audit-ready evidence</h2><p>Choose the framework and control before capture. CloudPen adds a visible banner, creates a normalized filename, and stores the PNG privately under the matching framework and control folder.</p></div>
-          <div className="capture-example"><span>FOLDER PATTERN</span><code>hipaa/164.312-a-1/2026/08/</code><span>FILE PATTERN</span><code>HIPAA_164.312-a-1_20260811T143000Z_access-review.png</code></div>
-          <button className="button primary" disabled={!canCapture} title={!canCapture ? "Reviewer, operator, or administrator role required" : undefined} onClick={openCapture}>▣ Capture screenshot</button>
-        </article>
-
-        <article className="panel screenshot-library">
-          <div className="panel-header"><div><span className="section-kicker">PRIVATE EVIDENCE LIBRARY</span><h2>Find screenshots by control</h2></div><span className="result-count">{screenshotsLoading ? "Searching…" : `${screenshots.length} result${screenshots.length === 1 ? "" : "s"}`}</span></div>
-          <form className="screenshot-search" onSubmit={(event) => { event.preventDefault(); void searchScreenshots(); }}>
-            <label className="field compact"><span>Compliance area</span><select value={screenshotFilters.frameworkId} onChange={(event) => setScreenshotFilters({ frameworkId: event.target.value, controlId: "", query: screenshotFilters.query })}><option value="">All frameworks</option>{complianceFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.label} · {framework.version}</option>)}</select></label>
-            <label className="field compact"><span>Control number</span><select value={screenshotFilters.controlId} disabled={!selectedFilterFramework} onChange={(event) => setScreenshotFilters({ ...screenshotFilters, controlId: event.target.value })}><option value="">All controls</option>{selectedFilterFramework?.controls.map((control) => <option value={control.id} key={control.id}>{control.id} · {control.title}</option>)}</select></label>
-            <label className="field compact search-wide"><span>Filename, title, or notes</span><input type="search" maxLength={100} value={screenshotFilters.query} onChange={(event) => setScreenshotFilters({ ...screenshotFilters, query: event.target.value })} placeholder="Search evidence…" /></label>
-            <div className="search-actions"><button className="button secondary" type="button" onClick={() => { const cleared = { frameworkId: "", controlId: "", query: "" }; setScreenshotFilters(cleared); void searchScreenshots(cleared); }}>Clear</button><button className="button primary" type="submit">Search</button></div>
-          </form>
-
-          {screenshotsLoading ? <div className="empty-state"><h3>Searching private evidence…</h3><p>Control metadata is queried without exposing object-store paths.</p></div> : screenshots.length === 0 ? <div className="empty-state"><div className="empty-glyph">▣</div><h3>No screenshots match this control</h3><p>Clear the filters or capture the first piece of evidence for this control.</p><button className="button primary" disabled={!canCapture} onClick={openCapture}>Capture evidence</button></div> : <div className="screenshot-grid">{screenshots.map((record) => <article className="screenshot-card" key={record.id}>
-            <a className="screenshot-preview" href={record.contentUrl} target="_blank" rel="noreferrer" aria-label={`Open ${record.title}`}><img src={record.contentUrl} alt={`${record.frameworkLabel} ${record.controlId}: ${record.title}`} loading="lazy" /></a>
-            <div className="screenshot-card-body"><div className="screenshot-card-top"><div><div className="screenshot-badges"><span className="badge status-private">Private · {record.frameworkId}</span><span className="badge status-planned">Collector submitted</span></div><h3>{record.title}</h3></div><code>{record.controlId}</code></div><p>{record.controlLabel}</p>{record.notes && <p className="screenshot-notes">{record.notes}</p>}<dl><div><dt>Captured</dt><dd>{new Date(record.capturedAt).toLocaleString()}</dd></div><div><dt>Image</dt><dd>{record.width}×{record.height} · {formatBytes(record.sizeBytes)}</dd></div></dl><div className="file-location"><span>STORAGE PATH</span><code>{record.folderPath}/{record.storedFilename}</code></div><div className="card-actions"><button className="button secondary" type="button" onClick={async () => { try { await navigator.clipboard.writeText(`${record.folderPath}/${record.storedFilename}`); setToast("Evidence path copied."); } catch { setToast("The evidence path could not be copied."); } }}>Copy path</button><a className="button primary" href={record.downloadUrl}>Download PNG</a></div></div>
-          </article>)}</div>}
-        </article>
-      </section>
-    );
-  }
-
   function renderReports() {
     const openRemediations = remediations.filter((item) => item.status !== "Closed").length;
     return <section className="report-layout"><article className="panel report-hero"><span className="section-kicker">SIGNED ASSESSMENT</span><h2>Cloud exposure and remediation report</h2><p>A bounded, machine-readable report derived from the current server-owned exposure snapshot and durable control-plane records.</p><div className="report-metrics"><div><strong>{attackPaths.length}</strong><span>attack paths</span></div><div><strong>{attackPaths.filter((path) => path.status === "Validated").length}</strong><span>validated</span></div><div><strong>{openRemediations}</strong><span>open remediations</span></div><div><strong>{evidencePackages.length}</strong><span>evidence packages</span></div></div><button className="button primary" onClick={exportAssessment}>⇩ Export signed JSON report</button></article><aside className="panel report-contents"><span className="section-kicker">REPORT CONTENTS</span><ul><li>Executive exposure summary</li><li>Evidence-backed path register</li><li>MITRE ATT&CK technique references</li><li>Root-cause remediation guidance</li><li>Ownership and SLA state</li><li>Audit-chain integrity status</li><li>Explicit demo/live provenance</li></ul><div className="connection-note"><span>i</span><p>PDF rendering and external ticket delivery are not enabled; the JSON envelope is signed and auditable.</p></div></aside></section>;
@@ -1078,10 +871,6 @@ export default function CloudPenDashboard({
   }
 
   const title = viewTitles[view];
-  const selectedCaptureFramework = frameworkById(captureForm.frameworkId) ?? complianceFrameworks[0];
-  const selectedCaptureControl = selectedCaptureFramework.controls.find((control) => control.id === captureForm.controlId) ?? selectedCaptureFramework.controls[0];
-  const captureFilenamePreview = screenshotFilename({ frameworkId: selectedCaptureFramework.id, controlId: selectedCaptureControl.id, customName: captureForm.customName || "evidence", capturedAt: new Date().toISOString() });
-  const captureFolderPreview = `${selectedCaptureFramework.id}/${controlFolderSegment(selectedCaptureControl.id)}/YYYY/MM`;
 
   return (
     <div className="app-shell">
@@ -1121,7 +910,7 @@ export default function CloudPenDashboard({
           <div className={`data-mode-banner ${dataMode}`} role="status"><strong>{dataMode === "demo" ? "Demo data" : "Live workspace"}</strong><span>{dataMode === "demo" ? "Attack paths and inventory are seeded examples. Durable plans, approvals, evidence, connectors, remediation, and audit events are real local records." : "Metrics and findings are derived from the current workspace inventory."}</span></div>
           <div className="page-heading">
             <div><span className="page-eyebrow">{title.eyebrow}</span><h1>{title.title}</h1><p>{title.description}</p></div>
-            {view === "screenshots" ? <div className="heading-actions"><button className="button primary" disabled={!canCapture} title={!canCapture ? "Reviewer, operator, or administrator role required" : undefined} onClick={openCapture}>▣ Capture screenshot</button></div> : <div className="heading-actions"><button className="button secondary" disabled={!canConnect} title={!canConnect ? "Operator or administrator role required" : undefined} onClick={() => setModal("connect")}>＋ Connect account</button><button className="button primary" disabled={!canPlan} title={!canPlan ? "Operator or administrator role required" : undefined} onClick={() => openValidation()}>▶ New validation</button></div>}
+            <div className="heading-actions"><button className="button secondary" disabled={!canConnect} title={!canConnect ? "Operator or administrator role required" : undefined} onClick={() => setModal("connect")}>＋ Connect account</button><button className="button primary" disabled={!canPlan} title={!canPlan ? "Operator or administrator role required" : undefined} onClick={() => openValidation()}>▶ New validation</button></div>
           </div>
           {view === "overview" && renderOverview()}
           {view === "paths" && renderPaths()}
@@ -1129,7 +918,6 @@ export default function CloudPenDashboard({
           {view === "runs" && renderRuns()}
           {view === "connectors" && renderConnectors()}
           {view === "remediation" && renderRemediation()}
-          {view === "screenshots" && renderScreenshots()}
           {(view === "evidence" || view === "audit") && renderEvidence()}
           {view === "reports" && renderReports()}
           {view === "administration" && renderAdministration()}
@@ -1142,22 +930,8 @@ export default function CloudPenDashboard({
       </nav>
 
       {modal && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setModal(null); }}>
-        <section className={`modal ${modal === "capture" ? "capture-modal" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
           <button className="modal-close" aria-label="Close dialog" onClick={() => setModal(null)}>×</button>
-          {modal === "capture" && <form onSubmit={captureScreenshot} noValidate>
-            <span className="section-kicker">PRIVATE COMPLIANCE EVIDENCE</span><h2 id="modal-title">Capture a control screenshot</h2><p className="modal-intro">Your browser will ask which screen, window, or tab to share. CloudPen captures one frame, stamps it locally, stops sharing, and uploads only the resulting PNG.</p>
-            <div className="capture-form-grid"><label className="field"><span>Compliance area</span><select autoFocus value={captureForm.frameworkId} onChange={(event) => { const framework = frameworkById(event.target.value) ?? complianceFrameworks[0]; setCaptureForm({ ...captureForm, frameworkId: framework.id, controlId: framework.controls[0].id }); }}>{complianceFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.label} · {framework.version}</option>)}</select></label><label className="field"><span>Control number</span><select value={captureForm.controlId} onChange={(event) => setCaptureForm({ ...captureForm, controlId: event.target.value })}>{selectedCaptureFramework.controls.map((control) => <option value={control.id} key={control.id}>{control.id} · {control.title}</option>)}</select></label></div>
-            <label className="field"><span>Evidence title</span><input maxLength={120} value={captureForm.title} onChange={(event) => setCaptureForm({ ...captureForm, title: event.target.value })} placeholder="Quarterly privileged access review" /></label>
-            <label className="field"><span>Custom file name</span><input maxLength={80} value={captureForm.customName} onChange={(event) => setCaptureForm({ ...captureForm, customName: event.target.value })} placeholder="access-review" /><small>CloudPen removes unsafe path characters and adds the framework, control, and UTC timestamp.</small></label>
-            <div className="naming-preview"><span>PRIVATE FOLDER</span><code>{captureFolderPreview}/</code><span>GENERATED FILE</span><code>{captureFilenamePreview}</code></div>
-            <label className="field"><span>Evidence notes <em>optional</em></span><textarea maxLength={500} rows={3} value={captureForm.notes} onChange={(event) => setCaptureForm({ ...captureForm, notes: event.target.value })} placeholder="What this screenshot demonstrates, review period, or collection context" /></label>
-            <div className="capture-form-grid"><label className="field"><span>Banner position</span><select value={captureForm.bannerPosition} onChange={(event) => setCaptureForm({ ...captureForm, bannerPosition: event.target.value as "top" | "bottom" })}><option value="bottom">Bottom</option><option value="top">Top</option></select></label><fieldset className="capture-options"><legend>Banner details</legend><label><input type="checkbox" checked={captureForm.includeTimestamp} onChange={(event) => setCaptureForm({ ...captureForm, includeTimestamp: event.target.checked })} /> UTC timestamp</label><label><input type="checkbox" checked={captureForm.includeActor} onChange={(event) => setCaptureForm({ ...captureForm, includeActor: event.target.checked })} /> Collector identity</label></fieldset></div>
-            <label className="acknowledge"><input type="checkbox" checked={captureForm.downloadCopy} onChange={(event) => setCaptureForm({ ...captureForm, downloadCopy: event.target.checked })} /><span>Download a local copy after private storage succeeds.</span></label>
-            <label className="acknowledge authorization-check"><input type="checkbox" checked={captureForm.authorized} onChange={(event) => setCaptureForm({ ...captureForm, authorized: event.target.checked })} /><span>I confirm I am authorized to capture the selected screen and have reviewed it for secrets, personal data, and unrelated content.</span></label>
-            {captureError && <p className="form-error" role="alert">{captureError}</p>}
-            <div className="connection-note"><span>i</span><p>The control number is always visible in the banner. Browser and operating-system sharing indicators remain authoritative; CloudPen stops every media track after one frame.</p></div>
-            <div className="modal-actions"><button type="button" className="button secondary" disabled={captureState !== "idle"} onClick={() => setModal(null)}>Cancel</button><button className="button primary" type="submit" disabled={captureState !== "idle" || !captureForm.authorized || captureForm.title.trim().length < 2 || !captureForm.customName.trim()}>{captureState === "choosing" ? "Choose a screen…" : captureState === "uploading" ? "Storing securely…" : "Choose screen and capture"}</button></div>
-          </form>}
           {modal === "validate" && <>
             <span className="section-kicker">AUTHORIZED TEST PLAN</span><h2 id="modal-title">Create validation run</h2><p className="modal-intro">Review the scope and execution mode before the runner receives a signed plan.</p>
             <label className="field"><span>Attack path</span><select value={runPathId} onChange={(event) => setRunPathId(event.target.value)}>{attackPaths.map((path) => <option key={path.id} value={path.id}>{path.id} · {path.title}</option>)}</select></label>

@@ -36,7 +36,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 ### Security
 
-- Known dependency vulnerabilities reduced to zero at the time of validation.
+- Production dependency vulnerabilities were reduced to zero at validation; two build-only Vinext `image-size` advisories are tracked with an artifact-reachability guard.
 - Host-header-derived social metadata removed.
 - Local listener restricted from `0.0.0.0` to `127.0.0.1`.
 - Core approval, canary-only, evidence-redaction, and cleanup guardrails made non-disableable.

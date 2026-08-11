@@ -6,12 +6,12 @@ All routes are same-origin application routes. They are not a public API and do 
 
 Hosted requests receive trusted Sites identity headers. CloudPen maps the normalized email to the first matching environment allowlist and enforces a capability in each route.
 
-| Role | Read | Capture screenshot | Create plan/remediation | Request connector | Configure/enroll | Approve |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Admin | Yes | Yes | Yes | Yes | Yes | Yes, except own request |
-| Operator | Yes | Yes | Yes | Yes | No | No |
-| Reviewer | Yes | Yes | No | No | No | Yes, except own request |
-| Viewer | Yes | No | No | No | No | No |
+| Role | Read | Create plan/remediation | Request connector | Configure/enroll | Approve |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Admin | Yes | Yes | Yes | Yes | Yes, except own request |
+| Operator | Yes | Yes | Yes | No | No |
+| Reviewer | Yes | No | No | No | Yes, except own request |
+| Viewer | Yes | No | No | No | No |
 
 Local mode supplies a loopback-only development administrator. Do not use local mode in a shared or hosted environment.
 
@@ -27,8 +27,6 @@ JSON mutations require:
 - a role with the required capability.
 
 Mutation requests that do not meet these conditions are rejected before business logic. Responses under `/api/` are `Cache-Control: no-store, private` after Worker hardening.
-
-`POST /api/screenshots` instead requires same-origin `multipart/form-data`, a total request below 13 MiB, and a PNG payload no larger than 12 MiB. The same Origin and Fetch Metadata rules apply.
 
 ## `GET /api/validation-runs`
 
@@ -186,39 +184,6 @@ The response contains a `payload` and an `integrity` envelope with SHA-256 diges
 
 The export also creates a retained evidence-manifest row containing package ID, path, classification, digest, key ID, actor, and timestamp. The package body is not retained in D1.
 
-## Screenshot evidence routes
-
-### `GET /api/screenshots`
-
-Returns up to 100 newest workspace-scoped records. Optional parameters are `framework`, `control`, and `q`. A control may only be supplied with its matching framework; free-text search is limited to 100 characters and matches title, filename, notes, and control label.
-
-- Capability: `read`
-- Rate limit: 120 requests per user per 60 seconds
-- Caching: disabled
-
-### `POST /api/screenshots`
-
-Accepts one browser-generated, banner-stamped PNG as multipart form data.
-
-- Capability: `capture` (admin, operator, reviewer)
-- Rate limit: 20 captures per user per 10 minutes
-- Success: `201`
-- Maximum PNG: 12 MiB, 12,000 pixels on either axis, and 60 megapixels
-
-Required fields are `image`, `frameworkId`, `controlId`, `title`, `customName`, `bannerPosition`, `capturedAt`, and `authorized=true`. Optional/display fields are `notes`, `includeTimestamp`, and `includeActor`. The service validates the framework/control pair against the built-in catalog, checks the PNG signature and IHDR dimensions, restricts the capture clock to ±10 minutes, normalizes the filename, calculates SHA-256, stores the object privately in R2, writes metadata to D1, and appends an audit event.
-
-Storage keys are server-derived and follow this logical layout:
-
-```text
-<workspace>/screenshots/<framework>/<control>/<YYYY>/<MM>/<record-id>--<generated-file>.png
-```
-
-The returned `folderPath` omits the workspace and internal record prefix so it is safe to show in the UI.
-
-### `GET /api/screenshots/{screenshotId}/content`
-
-Streams an authorized workspace screenshot through the application. `?download=1` changes `Content-Disposition` from inline to attachment. Responses are private, non-cacheable PNGs and include `X-CloudPen-SHA256` for integrity comparison. R2 has no public object URL.
-
 ## Additional control-plane routes
 
 | Route | Capability | Behavior |
@@ -248,8 +213,8 @@ Streams an authorized workspace screenshot through the application. `?download=1
 | 404 | Workspace-scoped record does not exist |
 | 409 | Duplicate connector/remediation or an invalid state transition |
 | 403 | Missing application membership, insufficient role, or cross-origin mutation |
-| 413 | JSON exceeds 8 KiB or screenshot upload exceeds its multipart/PNG limit |
-| 415 | Mutation uses the wrong JSON or multipart media type |
+| 413 | JSON exceeds 8 KiB |
+| 415 | Mutation does not use `application/json` |
 | 429 | Per-identity operation rate limit exceeded |
 | 500 | Durable state or security configuration unavailable; internal detail is suppressed |
 

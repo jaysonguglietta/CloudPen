@@ -163,30 +163,6 @@ export const graphEdges = sqliteTable("graph_edges", {
   evidenceJson: text("evidence_json").notNull(),
 });
 
-export const screenshotEvidence = sqliteTable("screenshot_evidence", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  frameworkId: text("framework_id").notNull(),
-  frameworkLabel: text("framework_label").notNull(),
-  controlId: text("control_id").notNull(),
-  controlLabel: text("control_label").notNull(),
-  title: text("title").notNull(),
-  notes: text("notes").notNull().default(""),
-  storedFilename: text("stored_filename").notNull(),
-  objectKey: text("object_key").notNull().unique(),
-  folderPath: text("folder_path").notNull(),
-  bannerPosition: text("banner_position", { enum: ["top", "bottom"] }).notNull(),
-  includeTimestamp: integer("include_timestamp", { mode: "boolean" }).notNull().default(true),
-  includeActor: integer("include_actor", { mode: "boolean" }).notNull().default(true),
-  capturedAt: text("captured_at").notNull(),
-  width: integer("width").notNull(),
-  height: integer("height").notNull(),
-  sizeBytes: integer("size_bytes").notNull(),
-  sha256Digest: text("sha256_digest").notNull(),
-  createdBy: text("created_by").notNull(),
-  createdAt: text("created_at").notNull(),
-});
-
 export const auditEvents = sqliteTable("audit_events", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
