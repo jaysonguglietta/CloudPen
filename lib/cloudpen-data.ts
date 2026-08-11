@@ -1,6 +1,18 @@
 export type Severity = "Critical" | "High" | "Medium" | "Low";
 export type PathStatus = "Validated" | "Inferred" | "Mitigated";
-export type ViewKey = "overview" | "paths" | "assets" | "runs" | "guardrails";
+export type ViewKey =
+  | "overview"
+  | "paths"
+  | "assets"
+  | "runs"
+  | "connectors"
+  | "remediation"
+  | "evidence"
+  | "screenshots"
+  | "audit"
+  | "reports"
+  | "administration"
+  | "guardrails";
 
 export type AttackStep = {
   label: string;
@@ -52,12 +64,123 @@ export type ValidationRun = {
   id: string;
   name: string;
   mode: "Read-only" | "Active canary";
-  status: "Completed" | "Running" | "Stopped" | "Planned" | "Awaiting approval";
+  status: "Completed" | "Running" | "Stopped" | "Planned" | "Awaiting approval" | "Approved" | "Rejected" | "Expired";
   pathCount: number;
   findings: number;
   requestedBy: string;
   started: string;
   duration: string;
+  attackPathId?: string;
+  authorizationDigest?: string;
+  signature?: string;
+  expiresAt?: string;
+  approvedBy?: string | null;
+  decisionReason?: string | null;
+};
+
+export type WorkspaceSummary = {
+  id: string;
+  name: string;
+  dataMode: "demo" | "live";
+  role: "admin" | "operator" | "reviewer" | "viewer";
+};
+
+export type ConnectorRecord = {
+  id: string;
+  name: string;
+  accountId: string;
+  provider: "AWS";
+  status: "Draft" | "Awaiting verification" | "Verified" | "Runner required" | "Disabled" | "Error";
+  externalIdHint: string;
+  createdBy: string;
+  createdAt: string;
+  lastSyncAt: string | null;
+  errorMessage: string | null;
+};
+
+export type EvidenceRecord = {
+  id: string;
+  pathId: string;
+  classification: string;
+  digest: string;
+  keyId: string;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type RemediationRecord = {
+  id: string;
+  pathId: string;
+  title: string;
+  status: "Open" | "In progress" | "Risk accepted" | "Ready to revalidate" | "Closed";
+  priority: Severity;
+  owner: string;
+  dueAt: string;
+  guidance: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditRecord = {
+  id: string;
+  actorEmail: string;
+  action: string;
+  target: string;
+  eventHash: string;
+  previousHash: string;
+  createdAt: string;
+};
+
+export type RunnerRecord = {
+  id: string;
+  name: string;
+  status: "Pending" | "Disabled";
+  publicKeyFingerprint: string;
+  executable: false;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type ScreenshotEvidenceRecord = {
+  id: string;
+  frameworkId: string;
+  frameworkLabel: string;
+  controlId: string;
+  controlLabel: string;
+  title: string;
+  notes: string;
+  storedFilename: string;
+  folderPath: string;
+  bannerPosition: "top" | "bottom";
+  includeTimestamp: boolean;
+  includeActor: boolean;
+  capturedAt: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  sha256Digest: string;
+  createdBy: string;
+  createdAt: string;
+  contentUrl: string;
+  downloadUrl: string;
+};
+
+export type ControlPlaneSnapshot = {
+  workspace: WorkspaceSummary;
+  runs: ValidationRun[];
+  connectors: ConnectorRecord[];
+  evidence: EvidenceRecord[];
+  remediations: RemediationRecord[];
+  audit: AuditRecord[];
+  runners: RunnerRecord[];
+  auditChainValid: boolean;
+};
+
+export type ExposureCatalog = {
+  accounts: CloudAccount[];
+  assets: CloudAsset[];
+  attackPaths: AttackPath[];
+  snapshot: { id: string; source: "demo-seed" | "aws-read-only"; status: "Complete" | "Partial"; collectedAt: string };
 };
 
 export const accounts: CloudAccount[] = [

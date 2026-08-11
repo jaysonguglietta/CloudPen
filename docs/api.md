@@ -6,18 +6,18 @@ All routes are same-origin application routes. They are not a public API and do 
 
 Hosted requests receive trusted Sites identity headers. CloudPen maps the normalized email to the first matching environment allowlist and enforces a capability in each route.
 
-| Role | Read | Create plan | Request connector | Configure guardrails | Approve |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Admin | Yes | Yes | Yes | Yes | Reserved; no endpoint |
-| Operator | Yes | Yes | Yes | No | No |
-| Reviewer | Yes | No | No | No | Reserved; no endpoint |
-| Viewer | Yes | No | No | No | No |
+| Role | Read | Capture screenshot | Create plan/remediation | Request connector | Configure/enroll | Approve |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Admin | Yes | Yes | Yes | Yes | Yes | Yes, except own request |
+| Operator | Yes | Yes | Yes | Yes | No | No |
+| Reviewer | Yes | Yes | No | No | No | Yes, except own request |
+| Viewer | Yes | No | No | No | No | No |
 
 Local mode supplies a loopback-only development administrator. Do not use local mode in a shared or hosted environment.
 
 ## Mutation requirements
 
-Every mutation requires:
+JSON mutations require:
 
 - `Content-Type: application/json`;
 - an `Origin` exactly equal to the request URL origin;
@@ -27,6 +27,8 @@ Every mutation requires:
 - a role with the required capability.
 
 Mutation requests that do not meet these conditions are rejected before business logic. Responses under `/api/` are `Cache-Control: no-store, private` after Worker hardening.
+
+`POST /api/screenshots` instead requires same-origin `multipart/form-data`, a total request below 13 MiB, and a PNG payload no larger than 12 MiB. The same Origin and Fetch Metadata rules apply.
 
 ## `GET /api/validation-runs`
 
@@ -159,13 +161,14 @@ Validation:
 - account ID: exactly 12 digits;
 - External ID: 8–128 characters from the explicit safe character set.
 
-Only a SHA-256 digest of the External ID is written to the audit event. The raw value is not persisted.
+Only a SHA-256 digest and four-character hint of the External ID are persisted. The raw value is not retained or returned.
 
 Response:
 
 ```json
 {
-  "status": "awaiting-runner-provisioning"
+  "id": "CON-4D8A21BC",
+  "status": "Runner required"
 }
 ```
 
@@ -181,14 +184,72 @@ Generates a redacted signed evidence package for a known synthetic path.
 
 The response contains a `payload` and an `integrity` envelope with SHA-256 digest and HMAC-SHA-256 signature. Credentials, tokens, customer payloads, and raw cloud responses are not part of the package.
 
+The export also creates a retained evidence-manifest row containing package ID, path, classification, digest, key ID, actor, and timestamp. The package body is not retained in D1.
+
+## Screenshot evidence routes
+
+### `GET /api/screenshots`
+
+Returns up to 100 newest workspace-scoped records. Optional parameters are `framework`, `control`, and `q`. A control may only be supplied with its matching framework; free-text search is limited to 100 characters and matches title, filename, notes, and control label.
+
+- Capability: `read`
+- Rate limit: 120 requests per user per 60 seconds
+- Caching: disabled
+
+### `POST /api/screenshots`
+
+Accepts one browser-generated, banner-stamped PNG as multipart form data.
+
+- Capability: `capture` (admin, operator, reviewer)
+- Rate limit: 20 captures per user per 10 minutes
+- Success: `201`
+- Maximum PNG: 12 MiB, 12,000 pixels on either axis, and 60 megapixels
+
+Required fields are `image`, `frameworkId`, `controlId`, `title`, `customName`, `bannerPosition`, `capturedAt`, and `authorized=true`. Optional/display fields are `notes`, `includeTimestamp`, and `includeActor`. The service validates the framework/control pair against the built-in catalog, checks the PNG signature and IHDR dimensions, restricts the capture clock to ±10 minutes, normalizes the filename, calculates SHA-256, stores the object privately in R2, writes metadata to D1, and appends an audit event.
+
+Storage keys are server-derived and follow this logical layout:
+
+```text
+<workspace>/screenshots/<framework>/<control>/<YYYY>/<MM>/<record-id>--<generated-file>.png
+```
+
+The returned `folderPath` omits the workspace and internal record prefix so it is safe to show in the UI.
+
+### `GET /api/screenshots/{screenshotId}/content`
+
+Streams an authorized workspace screenshot through the application. `?download=1` changes `Content-Disposition` from inline to attachment. Responses are private, non-cacheable PNGs and include `X-CloudPen-SHA256` for integrity comparison. R2 has no public object URL.
+
+## Additional control-plane routes
+
+| Route | Capability | Behavior |
+| --- | --- | --- |
+| `GET /api/control-plane` | `read` | Returns workspace provenance, runs, connectors, evidence manifests, remediation, runners, audit events, and chain-verification status |
+| `PATCH /api/validation-runs/{runId}` | `approve` or `plan` | Approves, rejects, or cancels an eligible plan with a required reason; never makes it executable |
+| `POST /api/remediations` | `plan` | Creates an owned, due-dated remediation linked to a known path |
+| `PATCH /api/remediations/{id}` | `plan` | Moves remediation through the supported workflow states |
+| `POST /api/connectors/{id}/discovery` | `connect` | Records a bounded AWS metadata-read-only discovery plan with `executable: false` |
+| `GET /api/guardrails/export` | `read` | Downloads a signed, non-executable policy envelope |
+| `GET /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state |
+| `POST /api/runners` | `enroll` (admin) | Pins a public-key fingerprint in `Pending` state with database-enforced `executable = 0` |
+
+### Approval rules
+
+- Only `Awaiting approval` plans may be approved or rejected.
+- The requester cannot approve or reject their own active plan.
+- The decision reason is required and audit logged.
+- Approved intent remains non-executable and expires with the original plan.
+- The requester or administrator may cancel an eligible plan.
+
 ## Errors
 
 | Status | Meaning |
 | ---: | --- |
 | 400 | Invalid JSON shape, field, path, mode, acknowledgement, or policy transition |
+| 404 | Workspace-scoped record does not exist |
+| 409 | Duplicate connector/remediation or an invalid state transition |
 | 403 | Missing application membership, insufficient role, or cross-origin mutation |
-| 413 | Body exceeds 8 KiB |
-| 415 | Mutation is not JSON |
+| 413 | JSON exceeds 8 KiB or screenshot upload exceeds its multipart/PNG limit |
+| 415 | Mutation uses the wrong JSON or multipart media type |
 | 429 | Per-identity operation rate limit exceeded |
 | 500 | Durable state or security configuration unavailable; internal detail is suppressed |
 

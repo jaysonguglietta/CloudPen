@@ -26,6 +26,7 @@ before(async () => {
     "--persist-to", stateDirectory,
     "--var", "CLOUDPEN_ADMIN_EMAILS:admin@example.com",
     "--var", "CLOUDPEN_VIEWER_EMAILS:viewer@example.com",
+    "--var", "CLOUDPEN_REVIEWER_EMAILS:reviewer@example.com",
     "--var", "CLOUDPEN_PLAN_SIGNING_KEY:integration-test-signing-key-with-at-least-32-bytes",
     "--var", `PUBLIC_APP_ORIGIN:${origin}`,
   ], {
@@ -166,4 +167,179 @@ test("enforces application roles independently of identity", async () => {
     body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
   });
   assert.equal(response.status, 403);
+});
+
+test("returns explicit demo provenance and authoritative empty workflow records", async () => {
+  const response = await fetch(`${origin}/api/control-plane`, { headers: identityHeaders });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.workspace.dataMode, "demo");
+  assert.equal(body.auditChainValid, true);
+  assert.ok(Array.isArray(body.connectors));
+  assert.ok(Array.isArray(body.remediations));
+  assert.ok(Array.isArray(body.evidence));
+});
+
+test("stores and retrieves private control-mapped screenshot evidence", async () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const form = new FormData();
+  form.set("image", new Blob([png], { type: "image/png" }), "capture.png");
+  form.set("frameworkId", "hipaa");
+  form.set("controlId", "164.312(a)(1)");
+  form.set("title", "Privileged access review");
+  form.set("customName", "access review / production");
+  form.set("notes", "Quarterly evidence collection");
+  form.set("bannerPosition", "bottom");
+  form.set("includeTimestamp", "true");
+  form.set("includeActor", "true");
+  form.set("capturedAt", new Date().toISOString());
+  form.set("authorized", "true");
+  const create = await fetch(`${origin}/api/screenshots`, {
+    method: "POST",
+    headers: { ...identityHeaders, origin },
+    body: form,
+  });
+  const raw = await create.text();
+  assert.equal(create.status, 201, raw);
+  const created = JSON.parse(raw).screenshot;
+  assert.match(created.id, /^SCR-[A-F0-9]{8}$/);
+  assert.equal(created.frameworkId, "hipaa");
+  assert.equal(created.controlId, "164.312(a)(1)");
+  assert.match(created.folderPath, /^hipaa\/164\.312-a-1\/\d{4}\/\d{2}$/);
+  assert.match(created.storedFilename, /^HIPAA_164\.312-a-1_\d{8}T\d{6}Z_access-review-production\.png$/);
+
+  const list = await fetch(`${origin}/api/screenshots?framework=hipaa&control=${encodeURIComponent("164.312(a)(1)")}&q=quarterly`, { headers: identityHeaders });
+  const listed = await list.json();
+  assert.equal(list.status, 200);
+  assert.equal(listed.screenshots.length, 1);
+  assert.equal(listed.screenshots[0].sha256Digest.length, 43);
+
+  const content = await fetch(`${origin}${created.contentUrl}`, { headers: identityHeaders });
+  assert.equal(content.status, 200);
+  assert.equal(content.headers.get("content-type"), "image/png");
+  assert.equal(content.headers.get("cache-control"), "no-store, private");
+  assert.equal(content.headers.get("x-content-type-options"), "nosniff");
+  assert.deepEqual(Buffer.from(await content.arrayBuffer()), png);
+});
+
+test("persists connector records without returning the raw external ID", async () => {
+  const externalId = "northstar-integration-secret-value";
+  const response = await fetch(`${origin}/api/connectors`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ name: "Payments Production", accountId: "123456789012", externalId }),
+  });
+  const raw = await response.text();
+  assert.equal(response.status, 202, raw);
+  const created = JSON.parse(raw);
+  assert.equal(created.status, "Runner required");
+  assert.match(created.id, /^CON-[A-Z0-9]{8}$/);
+
+  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  assert.equal(snapshot.connectors.length, 1);
+  assert.equal(snapshot.connectors[0].accountId, "123456789012");
+  assert.equal(snapshot.connectors[0].externalIdHint, "••••alue");
+  assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(externalId));
+
+  const discovery = await fetch(`${origin}/api/connectors/${created.id}/discovery`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
+  const discoveryBody = await discovery.json();
+  assert.equal(discovery.status, 202);
+  assert.equal(discoveryBody.status, "Runner required");
+  assert.equal(discoveryBody.scope.executable, false);
+});
+
+test("enforces separation of duties for active-plan approval", async () => {
+  const create = await fetch(`${origin}/api/validation-runs`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ attackPathId: "CP-1037", mode: "Active canary", acknowledged: true }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201);
+
+  const selfApproval = await fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+    method: "PATCH",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ decision: "approve", reason: "Authorized integration validation" }),
+  });
+  assert.equal(selfApproval.status, 400);
+
+  const reviewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "reviewer@example.com" };
+  const approval = await fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+    method: "PATCH",
+    headers: { ...reviewerHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ decision: "approve", reason: "Scope and canary controls reviewed" }),
+  });
+  const approved = await approval.json();
+  assert.equal(approval.status, 200);
+  assert.equal(approved.executable, false);
+});
+
+test("creates retained evidence manifests and tracked remediation", async () => {
+  const evidence = await fetch(`${origin}/api/evidence/CP-1042`, { headers: identityHeaders });
+  const evidenceBody = await evidence.json();
+  assert.equal(evidence.status, 200);
+  assert.match(evidenceBody.packageId, /^EV-[A-Z0-9]{8}$/);
+  assert.equal(evidenceBody.payload.redaction.credentials, "removed");
+
+  const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
+  const remediation = await fetch(`${origin}/api/remediations`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ pathId: "CP-1042", owner: "Platform Security", dueAt }),
+  });
+  const remediationBody = await remediation.json();
+  assert.equal(remediation.status, 201);
+  assert.equal(remediationBody.remediation.status, "Open");
+
+  const update = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+    method: "PATCH",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "In progress" }),
+  });
+  assert.equal(update.status, 200);
+
+  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  assert.equal(snapshot.auditChainValid, true);
+  assert.ok(snapshot.evidence.some((item) => item.id === evidenceBody.packageId));
+  assert.ok(snapshot.remediations.some((item) => item.id === remediationBody.remediation.id && item.status === "In progress"));
+});
+
+test("exports a signed guardrail policy that remains non-executable", async () => {
+  const response = await fetch(`${origin}/api/guardrails/export`, { headers: identityHeaders });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.payload.executable, false);
+  assert.equal(body.integrity.algorithm, "HMAC-SHA-256");
+  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+});
+
+test("stages runner enrollment without creating an execution capability", async () => {
+  const response = await fetch(`${origin}/api/runners`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ name: "Production security runner", publicKeyFingerprint: "a".repeat(64) }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(body.runner.status, "Pending");
+  assert.equal(body.runner.executable, false);
+
+  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  assert.ok(snapshot.runners.some((runner) => runner.id === body.runner.id && runner.executable === false));
+});
+
+test("exports a signed assessment with provenance and no execution authority", async () => {
+  const response = await fetch(`${origin}/api/reports/export`, { headers: identityHeaders });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.payload.schema, "cloudpen.assessment.v1");
+  assert.equal(body.payload.assurance.dataMode, "demo");
+  assert.equal(body.payload.assurance.executable, false);
+  assert.equal(body.payload.assurance.auditChainValid, true);
+  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
 });

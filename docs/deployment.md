@@ -4,9 +4,9 @@
 
 | Mode | Purpose | Identity | State | Network exposure |
 | --- | --- | --- | --- | --- |
-| Local evaluation | Developer and product evaluation | Explicit loopback development admin | Local Wrangler D1 | `127.0.0.1:8787` only |
-| Development | Hot-reload UI work | Development identity on loopback | Cloudflare plugin local bindings | `127.0.0.1` only |
-| Hosted private | Controlled workspace evaluation | Sites identity plus CloudPen role allowlist | Sites-managed D1 | HTTPS through Sites access policy |
+| Local evaluation | Developer and product evaluation | Explicit loopback development admin | Local Wrangler D1 and R2 | `127.0.0.1:8787` only |
+| Development | Hot-reload UI work | Development identity on loopback | Cloudflare plugin local D1 and R2 bindings | `127.0.0.1` only |
+| Hosted private | Controlled workspace evaluation | Sites identity plus CloudPen role allowlist | Sites-managed D1 and private R2 | HTTPS through Sites access policy |
 
 There is no supported self-hosted public deployment and no production AWS runner deployment in this repository.
 
@@ -34,9 +34,9 @@ Email matching is case-insensitive. If an email occurs in multiple lists, the fi
 
 Never commit a real signing key or use the local fallback in a shared environment. `.env.example` documents keys only; all `.env*` values except the example are ignored.
 
-## D1 binding
+## Durable bindings
 
-`.openai/hosting.json` declares logical binding `DB`. Hosted resource IDs belong to Sites and must not be copied into source. The migration under `drizzle/` creates the control-plane tables and indexes.
+`.openai/hosting.json` declares D1 binding `DB` and private R2 binding `EVIDENCE`. Hosted resource IDs belong to Sites and must not be copied into source. The migrations under `drizzle/` create the control-plane tables and indexes. Screenshot metadata lives in D1; PNG bytes live in R2 and are never exposed through a public bucket URL.
 
 ## Local build and startup
 
@@ -52,7 +52,7 @@ The launcher:
 
 - invokes the built Worker through Wrangler;
 - binds only to IPv4 loopback;
-- persists D1 under `.wrangler/state`;
+- persists D1 and R2 development state under `.wrangler/state`;
 - sets local mode and the canonical local origin;
 - leaves the service in the foreground so normal process supervision can stop it.
 
@@ -74,7 +74,7 @@ Before deploying:
 2. Configure the application role allowlists.
 3. Generate a unique production signing key with a cryptographically secure generator and store it as a Sites secret.
 4. Set the canonical HTTPS origin.
-5. Confirm logical D1 binding `DB` and inspect the migration.
+5. Confirm logical D1 binding `DB`, private R2 binding `EVIDENCE`, and inspect the migrations.
 6. Run every release gate in `testing-and-release.md`.
 7. Verify that `CLOUDPEN_LOCAL_MODE` is absent.
 8. Confirm that no AWS credentials, SDK execution, runner service, or outbound command channel is present.
@@ -86,7 +86,7 @@ After deployment, verify unauthenticated denial, unauthorized-user denial, autho
 Application rollback and database rollback are separate decisions.
 
 - Prefer deploying the last known-good application version.
-- Do not reverse a database migration blindly. Current migration is additive; future migrations require a documented compatibility and restore plan.
+- Do not reverse a database migration blindly. Migration `0001` rebuilds `validation_runs` to expand its state constraint, then adds new workflow and exposure tables; preserve a verified backup and test the migration against a copy before hosted rollout.
 - Preserve audit and plan records unless an approved retention or incident procedure requires otherwise.
 - Rotate the signing key if a rollback was triggered by suspected secret exposure; old HMAC packages then require an explicit historical verification policy.
 

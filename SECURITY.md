@@ -6,10 +6,11 @@ CloudPen is a security-validation control plane. It does not currently execute A
 
 - Sites provides the external identity boundary; application roles are enforced from explicit email allowlists.
 - Local development binds to loopback and uses a development identity only in explicit local mode or while `NODE_ENV=development`.
-- Mutation APIs require JSON, same-origin requests, bounded bodies, authorization, and D1-backed rate limits.
+- Mutation APIs require same-origin requests, bounded JSON or multipart bodies, authorization, and D1-backed rate limits.
 - Validation requests create server-owned HMAC-signed plans. Plans are explicitly non-executable in this release.
 - Active canary plans enter `Awaiting approval`; the requester cannot cause execution.
 - Evidence exports are generated server-side, redacted, signed, and logged.
+- Screenshot uploads require explicit capture authorization; the service accepts only bounded PNG data, validates its signature and dimensions, computes a SHA-256 digest, stores bytes privately in R2, and retains workspace-scoped control metadata in D1.
 - Audit events form an append-only hash chain in D1.
 - Production safety controls cannot be disabled through the API.
 - Security headers, clean build outputs, dependency auditing, tests, and CI gates are enforced.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Future design only. No runner, enrollment protocol, command channel, AWS SDK execution, or credential exchange exists in this repository. None of this document should be interpreted as implemented behavior.
+Future execution design. The control plane can now stage a `Pending` enrollment record containing a runner name and SHA-256 public-key fingerprint. The database forces that record and every discovery job to `executable = 0`. No enrollment token, command channel, AWS SDK execution, credential exchange, runner attestation, or plan delivery exists. None of the remaining design should be interpreted as implemented behavior.
 
 ## Security objective
 

@@ -8,6 +8,20 @@
       "when": 1785510000000,
       "tag": "0000_cloudpen_control_plane",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785758400000,
+      "tag": "0001_complete_control_plane",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786464000000,
+      "tag": "0002_screenshot_evidence",
+      "breakpoints": true
     }
   ]
 }

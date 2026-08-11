@@ -1,17 +1,28 @@
 # Data model
 
-CloudPen stores control-plane state in D1. The authoritative schema is declared in `db/schema.ts` and migration `drizzle/0000_cloudpen_control_plane.sql`.
+CloudPen stores control-plane and exposure-snapshot metadata in D1 and screenshot PNG bytes in private R2. The authoritative D1 schema is declared in `db/schema.ts`; migrations upgrade the baseline without discarding existing plans.
 
 ```mermaid
 erDiagram
   WORKSPACES ||--o{ MEMBERSHIPS : contains
   WORKSPACES ||--|| GUARDRAIL_POLICIES : enforces
   WORKSPACES ||--o{ VALIDATION_RUNS : owns
+  WORKSPACES ||--o{ CONNECTORS : owns
+  WORKSPACES ||--o{ EVIDENCE_PACKAGES : retains
+  WORKSPACES ||--o{ SCREENSHOT_EVIDENCE : indexes
+  WORKSPACES ||--o{ REMEDIATIONS : tracks
+  WORKSPACES ||--o{ RUNNER_ENROLLMENTS : stages
+  WORKSPACES ||--o{ EXPOSURE_SNAPSHOTS : collects
+  EXPOSURE_SNAPSHOTS ||--o{ CLOUD_ACCOUNTS : contains
+  EXPOSURE_SNAPSHOTS ||--o{ CLOUD_ASSETS : contains
+  EXPOSURE_SNAPSHOTS ||--o{ EXPOSURE_PATHS : computes
+  EXPOSURE_SNAPSHOTS ||--o{ GRAPH_EDGES : connects
   WORKSPACES ||--o{ AUDIT_EVENTS : records
 
   WORKSPACES {
     text id PK
     text name
+    text data_mode
     text created_at
   }
   MEMBERSHIPS {
@@ -42,6 +53,8 @@ erDiagram
     text approved_by
     text authorization_digest
     text plan_signature
+    text expires_at
+    text decision_reason
     integer findings
     text created_at
     text updated_at
@@ -57,6 +70,25 @@ erDiagram
     text event_hash
     text created_at
   }
+  SCREENSHOT_EVIDENCE {
+    text id PK
+    text workspace_id
+    text framework_id
+    text control_id
+    text stored_filename
+    text object_key
+    text folder_path
+    text banner_position
+    boolean include_timestamp
+    boolean include_actor
+    text captured_at
+    integer width
+    integer height
+    integer size_bytes
+    text sha256_digest
+    text created_by
+    text created_at
+  }
   RATE_LIMITS {
     text key PK
     integer count
@@ -68,7 +100,7 @@ erDiagram
 
 ### `workspaces`
 
-Contains the single synthetic workspace. Multi-tenant workspace creation, deletion, and lifecycle management are not implemented.
+Contains the configured organization and an explicit `demo` or `live` provenance mode. Every product table and query is workspace scoped. Self-service workspace creation, deletion, switching, and cross-organization administration are intentionally not exposed yet.
 
 ### `memberships`
 
@@ -76,9 +108,9 @@ Records users observed after successful environment-allowlist authorization. The
 
 Roles:
 
-- `admin`: read, create plans, configure, request connectors, and future approval capability.
+- `admin`: read, create plans/remediation, configure, request connectors, approve another requester's plan, and stage runner enrollment.
 - `operator`: read, create plans, and request connectors.
-- `reviewer`: read and reserved future approval capability.
+- `reviewer`: read and approve or reject another requester's active plan.
 - `viewer`: read only.
 
 ### `guardrail_policies`
@@ -87,7 +119,27 @@ Stores mandatory execution-policy values. The current API rejects any attempt to
 
 ### `validation_runs`
 
-Stores server-issued plans and their integrity data. Current writes produce only `Planned` or `Awaiting approval`. No code path advances a plan to execution. `approved_by` is reserved and remains null.
+Stores server-issued plans and integrity data. Control-plane transitions include `Planned`, `Awaiting approval`, `Approved`, `Rejected`, `Expired`, and `Stopped`. Approval requires a distinct identity and still grants no execution capability.
+
+### Connector and workflow tables
+
+- `connectors` retains AWS account identity, External ID digest/hint, owner, status, and synchronization state without storing credentials or the raw External ID.
+- `evidence_packages` retains signed-manifest metadata while the exported evidence body remains ephemeral.
+- `remediations` tracks owner, due date, severity, guidance, and revalidation-oriented status.
+- `discovery_jobs` stores read-only AWS metadata scope with a database check forcing `executable = 0`.
+- `runner_enrollments` pins a reviewed public-key fingerprint in `Pending` or `Disabled` state, also with database-enforced `executable = 0`.
+
+### `screenshot_evidence`
+
+Indexes one privately stored PNG with a server-derived object key, framework/control mapping, generated filename and logical folder, banner settings, client capture time, dimensions, byte size, SHA-256 digest, and actor attribution. The image body is not stored in D1. Reads always resolve the object key through a workspace-scoped row, and the R2 bucket is not public.
+
+### Exposure graph tables
+
+- `exposure_snapshots` identifies the collection source, status, and timestamp.
+- `cloud_accounts`, `cloud_assets`, and `exposure_paths` contain normalized server-owned projections for a snapshot.
+- `graph_edges` records directional relationships and bounded evidence metadata used to reconstruct attack reachability.
+
+The current snapshot is a deterministic `demo-seed`. These tables are the ingestion boundary for a future customer-hosted read-only AWS collector; the browser no longer supplies authoritative topology.
 
 ### `audit_events`
 
@@ -107,7 +159,9 @@ Stores per-identity counters and Unix expiry timestamps. Keys include the operat
 | Signing key | Secret | Environment secret only; never stored in D1 or returned |
 | Plan digest and HMAC | Integrity metadata | Stored and returned in plan receipt |
 | Evidence observations | Synthetic confidential sample | Returned in a signed, non-cacheable download |
-| Cloud topology | Synthetic sample | Bundled client-side; unsuitable for real tenant data |
+| Screenshot PNG | Potentially sensitive compliance evidence | Private R2 object; authenticated non-cacheable application read; 12 MiB and 60 MP bounds |
+| Screenshot control metadata | Confidential tenant metadata | Workspace-scoped D1 row with generated path and SHA-256 digest |
+| Cloud topology | Synthetic sample | Seeded into D1 and server-delivered with explicit demo provenance |
 
 ## Retention
 

@@ -81,7 +81,7 @@ The application writes canonical event hashes linked by `previous_hash`. Operati
 5. confirm each next `previous_hash` equals the prior event hash;
 6. flag missing, duplicate, reordered, or branched links.
 
-An automated verifier and external chain anchor are not yet implemented. Database administrators can still rewrite a complete chain; do not call it immutable evidence.
+The control-plane snapshot endpoint and Evidence & Audit view run this verification automatically. An external chain anchor is not implemented. Database administrators can still rewrite a complete chain; do not call it immutable evidence.
 
 ## Backup, restore, and retention
 
@@ -103,7 +103,9 @@ After any incident, outage, migration, or rollback, run the full automated suite
 - cross-origin rejection;
 - non-disableable guardrails;
 - plan `executable: false`;
-- active-canary `Awaiting approval`;
+- active-canary separation of duties and non-executable approved intent;
+- connector External ID non-disclosure and non-executable discovery scope;
+- pending runner enrollment with `executable: false`;
 - evidence integrity envelope;
 - D1 durability and audit chaining;
 - response security headers;

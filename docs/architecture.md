@@ -2,7 +2,7 @@
 
 ## Current scope
 
-CloudPen is a single-workspace, AWS-themed attack-path validation control plane. The current code renders synthetic topology, accepts constrained plan requests, stores control-plane records, and exports signed synthetic evidence. It performs no AWS API calls and has no runner communication channel.
+CloudPen is an AWS-first attack-path validation control plane. The current code loads an explicitly labeled D1 exposure snapshot, accepts constrained plan and review decisions, stores connector/evidence/remediation/reporting records, and stages non-executable discovery and runner-enrollment intent. It performs no AWS API calls and has no runner communication channel.
 
 ## System context
 
@@ -14,8 +14,10 @@ flowchart LR
   P --> A["Application RBAC and request controls"]
   A --> C["Control-plane service"]
   C --> D[("Cloudflare D1")]
+  C --> O[("Private R2 evidence objects")]
   W --> B["Browser dashboard"]
-  C -. "No channel exists" .-> R["Future customer-hosted runner"]
+  C --> X["Exposure snapshots and graph records"]
+  C -. "Enrollment record only; no channel" .-> R["Future customer-hosted runner"]
   R -. "Disabled" .-> AWS["Customer AWS accounts"]
 ```
 
@@ -26,10 +28,11 @@ flowchart LR
 | Sites dispatcher | External access restriction and user identity | Identity only; application role checks remain mandatory |
 | Worker | Request entry point, runtime bindings, response hardening, image handling | Removes identifying headers; applies CSP, framing, MIME, privacy, and transport controls |
 | Server page | Requires identity and application membership before rendering the dashboard | Per-request dynamic rendering prevents shared authenticated output |
-| API routes | Parse request contracts and require capabilities | Mutation routes require same-origin JSON and bounded bodies |
+| API routes | Parse request contracts and require capabilities | Mutation routes require same-origin bounded JSON or screenshot multipart bodies |
 | Control-plane service | Business rules, plan signing, evidence packaging, audit chaining, rate limits | Server-only module; browser cannot mark runs complete or executable |
-| D1 | Durable workspace, membership, guardrail, validation, audit, and rate-limit state | Queries use prepared statements; current prototype uses one fixed workspace |
-| Browser dashboard | Presentation and user interaction | Synthetic topology is client-visible; browser state is non-authoritative |
+| D1 | Durable workspace, exposure graph, connector, validation, evidence, remediation, runner-staging, audit, and rate-limit state | Queries use prepared statements and workspace scoping |
+| R2 | Private screenshot PNG bodies | No public URL; object keys are server-derived and resolved through workspace-scoped D1 metadata |
+| Browser dashboard | Presentation and user interaction | Receives a server-owned snapshot with explicit provenance; browser state is non-authoritative |
 
 ## Trust boundaries
 
@@ -43,11 +46,13 @@ An authenticated email is mapped server-side to one role through environment all
 
 ### 3. API route to durable state
 
-Route handlers validate method-specific contracts before invoking the control-plane service. The service uses prepared D1 statements, fixed workspace scoping, and server-derived actor identity. Request-provided identities, workspace IDs, statuses, signatures, and timestamps are not accepted.
+Route handlers validate method-specific contracts before invoking the control-plane service. The service uses prepared D1 statements, workspace scoping, and server-derived actor identity. Request-provided identities, workspace IDs, statuses, signatures, and timestamps are not accepted.
+
+Screenshot capture is the bounded exception where the browser supplies a client capture timestamp and stamped PNG. The service restricts the timestamp to a short clock window, validates the selected framework/control pair and PNG structure, derives all storage paths, hashes the bytes, and records the authenticated actor. The browser never supplies an R2 object key or workspace ID.
 
 ### 4. Control plane to future runner
 
-No connection exists. Plans contain `executable: false`; active canary plans stop at `Awaiting approval`. Adding a runner changes the highest-risk trust boundary and requires the mandatory design in `runner-security-design.md`.
+No connection exists. Plans contain `executable: false`; an approved active-canary plan records intent only. Discovery jobs and pending runner enrollments are database-constrained to `executable = 0`. Adding a delivery channel or AWS credential exchange changes the highest-risk trust boundary and requires the mandatory design in `runner-security-design.md`.
 
 ## Request flow: validation plan
 
@@ -74,7 +79,7 @@ sequenceDiagram
 
 ### Local evaluation
 
-`npm start` runs the built Worker through Wrangler on `127.0.0.1:8787`. Local mode supplies a development-only administrator identity and signing key, and D1 persists under the ignored `.wrangler/state` directory. This is not an authentication model for shared environments.
+`npm start` runs the built Worker through Wrangler on `127.0.0.1:8787`. Local mode supplies a development-only administrator identity and signing key, and D1/R2 state persists under the ignored `.wrangler/state` directory. This is not an authentication model for shared environments.
 
 ### Hosted private deployment
 
@@ -88,11 +93,13 @@ Sites provides identity, private/custom access, D1 binding injection, and enviro
 4. Core safety guardrails cannot be disabled through the API.
 5. Unauthenticated, unauthorized, cross-origin, malformed, oversized, and over-limit requests fail closed.
 6. Missing D1 or signing configuration fails the operation rather than falling back to browser storage.
+7. Demo and live provenance must remain visible at every decision and reporting surface.
+8. Requesters cannot approve their own active plan.
 
 ## Known architectural limitations
 
-- The workspace identifier is fixed to `northstar-labs`; this is not multi-tenant architecture.
-- Synthetic account, asset, and path data is bundled into the client.
+- The current deployment is one configured organization. Tables and queries are tenant scoped, but workspace lifecycle and switching are not self-service.
+- The first exposure snapshot is a server-owned deterministic demo seed; a real AWS collector is not enrolled.
 - HMAC signatures require shared-secret verification and are not suitable for independent third-party attestation.
 - Runtime schema initialization duplicates the migration as a compatibility measure and must remain synchronized.
 - The framework currently requires inline bootstrap code in the CSP.

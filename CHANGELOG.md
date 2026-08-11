@@ -13,12 +13,17 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Loopback-only local startup with persistent project-local D1 state.
 - Adversarial integration tests and pinned CI security gates.
 - Architecture, API, security, deployment, operations, runner, testing, and contribution documentation.
+- Durable connectors, approval decisions, evidence manifests, remediation workflows, signed reports, and pending runner enrollment records.
+- D1-owned exposure snapshots, cloud accounts, assets, attack paths, and graph edges with explicit demo provenance.
+- Shareable view URLs, authoritative empty states, a real help surface, audit-chain verification, and signed guardrail export.
 
 ### Changed
 
 - Validation actions now create non-executable server-owned plans instead of simulating runs in browser storage.
 - Active-canary requests now stop in `Awaiting approval` and cannot reach a runner.
 - Connector submissions record a request and External ID digest without creating AWS trust or storing credentials.
+- Reviewer/admin decisions now enforce requester/approver separation and remain non-executable.
+- Placeholder remediation, approval, help, report, connector, and policy-export actions now invoke durable server workflows.
 - Evidence export is server-owned, redacted, signed, non-cacheable, and audit logged.
 - Dependencies were upgraded and the vulnerable legacy Drizzle generation toolchain was removed.
 
@@ -35,6 +40,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Host-header-derived social metadata removed.
 - Local listener restricted from `0.0.0.0` to `127.0.0.1`.
 - Core approval, canary-only, evidence-redaction, and cleanup guardrails made non-disableable.
+- Runner enrollment and discovery-plan schemas enforce `executable = 0` at the database boundary.
 
 ## 0.1.0 — Prototype baseline
 

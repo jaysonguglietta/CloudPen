@@ -1,17 +1,17 @@
 # Adversarial security review
 
-- **Review date:** 2026-07-31, updated for repository publication 2026-08-03
+- **Review date:** 2026-07-31, updated for control-plane expansion 2026-08-03
 - **Scope:** code in this repository, local Worker deployment, and intended private Sites deployment
 - **Deployment classification:** pre-production control-plane prototype
 - **Cloud execution:** absent and deliberately disabled
 
 ## 1. Executive summary
 
-CloudPen now has a defensible fail-closed control-plane foundation for synthetic evaluation. Application identity and role checks execute server-side; plans, guardrails, rate limits, and audit events are server-owned in D1; mutations enforce same-origin bounded JSON; plans and evidence carry integrity envelopes; core guardrails cannot be disabled; local deployment is loopback-only; response hardening and clean-build controls are present; and the dependency audit was clean at the time of validation.
+CloudPen now has a defensible fail-closed control-plane foundation for synthetic evaluation. Identity, roles, exposure snapshots, connectors, plan/approval decisions, evidence manifests, screenshot metadata, remediation, pending runner enrollment, guardrails, rate limits, and audit events are server-owned in D1; private screenshot bytes are stored in R2. Mutations enforce same-origin bounded JSON or purpose-specific multipart input; plans, generated evidence, policies, and reports carry integrity envelopes; core guardrails cannot be disabled; and discovery/runner records are database-constrained to non-executable state.
 
 No confirmed remote code execution, injection, SSRF, XSS, credential leakage, authentication bypass through the supported Sites path, or real cloud data exposure was found in the hardened version. The most important security property is absence: there is no AWS credential flow, runner protocol, or API execution capability.
 
-The system is not production-ready for real tenants or penetration testing. Its residual risks are architectural: identity-header provenance depends on the Sites boundary, topology remains bundled client-side, tenancy is fixed to one workspace, HMAC does not provide independent attestation, audit history lacks an external anchor, retention and recovery are undefined, and a runner security model is not implemented. These are release gates, not backlog polish.
+The system is not production-ready for real tenants or penetration testing. Its residual risks are architectural: identity-header provenance depends on the Sites boundary, the configured organization has no self-service tenant lifecycle, HMAC does not provide independent attestation, audit history lacks an external anchor, retention and recovery are undefined, and the runner protocol is only a non-executable enrollment scaffold. These are release gates, not backlog polish.
 
 ## 2. System overview and trust boundaries
 
@@ -20,18 +20,21 @@ The system is not production-ready for real tenants or penetration testing. Its 
 - User identity, role assignment, and authorization decisions
 - Validation plan scope, guardrails, signature, expiry, and status
 - Evidence observations and integrity metadata
+- User-captured screenshot PNGs, control mappings, filenames, digests, and collector attribution
 - Audit attribution and hash-chain continuity
 - AWS account identifiers and External ID digests in connector events
-- D1 data and the plan-signing secret
+- D1 data, private R2 objects, and the plan-signing secret
 - Source, lockfile, CI workflow, migration, and deployment configuration
 
 ### Entry points
 
 - `GET /` and `/access-denied`
-- `GET/POST /api/validation-runs`
+- `GET/POST/PATCH /api/validation-runs`
 - `GET/PATCH /api/guardrails`
 - `POST /api/connectors`
 - `GET /api/evidence/{pathId}`
+- `GET/POST /api/screenshots` and `GET /api/screenshots/{screenshotId}/content`
+- `GET /api/control-plane`, signed report/policy exports, remediation, discovery-plan, and runner-enrollment routes
 - `/_vinext/image`
 - Local Wrangler service on `127.0.0.1:8787`
 - Hosted Sites dispatcher and environment bindings
@@ -41,7 +44,7 @@ The system is not production-ready for real tenants or penetration testing. Its 
 
 - HTTP methods, paths, query strings, headers, Origin, content type, content length, and bodies
 - Browser state, JavaScript execution, timing, retries, concurrency, and UI manipulation
-- Path IDs, validation mode, acknowledgement, connector name/account/External ID, and guardrail property
+- Path IDs, validation mode, acknowledgement, connector name/account/External ID, guardrail property, screenshot bytes, capture metadata, framework/control selection, filename, notes, and client timestamp
 - Dependency and source contributions
 - Local processes able to reach loopback
 
@@ -83,10 +86,14 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 | --- | --- | --- |
 | Page authentication | Sites identity, server redirect, application allowlist | Header provenance requires dispatcher isolation |
 | RBAC | Server capability matrix in every API | Static environment lists lack lifecycle automation |
-| Mutations | JSON only, exact Origin, Fetch Metadata, 8 KiB cap, field validation | No general API client authentication model by design |
-| D1 | Prepared statements, fixed workspace predicate, constraints, indexes | Single workspace and admin-level tampering remain |
+| Mutations | Exact Origin, Fetch Metadata, bounded JSON or screenshot multipart media types, field validation | No general API client authentication model by design |
+| Screenshot upload | Exact Origin, role capability, multipart/PNG size and dimension bounds, catalog validation, server-derived object key, SHA-256, private R2 | Client-generated pixels and banner are not source-attested; sensitive content and misleading evidence remain possible |
+| D1 | Prepared statements, workspace predicates, constraints, indexes | One configured organization and admin-level tampering remain |
 | Plan creation | Server timestamps/status, enforced policy, expiry, digest/HMAC, non-executable | HMAC shared secret and no verifier/runner protocol |
-| Evidence | Server-generated, redacted fields, signed, non-cacheable, audited | Synthetic only; retention and asymmetric verification absent |
+| Evidence | Server-generated, redacted fields, signed, non-cacheable, manifest-retained, audited | Synthetic only; retention and asymmetric verification absent |
+| Screenshot evidence | Workspace-scoped D1 metadata, private R2, authenticated non-cacheable read, audited creation | May contain real sensitive data; no redaction, approval, retention, or independent capture attestation |
+| Approval | Distinct reviewer/admin, required reason, expiry, audited transition | Approved intent remains non-executable; no step-up or nonce protocol |
+| Discovery/runner staging | Service allowlist, pinned fingerprint, database `executable = 0` | No ownership proof, workload identity, delivery, or collector exists |
 | Audit | Application append-only hash chain, branch-prevention index | No external anchor; DB admin can rewrite full chain |
 | Rate limiting | D1 per-email counters on primary operations | No edge/global anonymous limiter documented |
 | Worker response | CSP, frame denial, nosniff, referrer, permissions, COOP/CORP, HSTS on HTTPS | CSP still permits inline framework code |
@@ -118,22 +125,22 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 
 **CWE/OWASP:** CWE-345; OWASP A07 Identification and Authentication Failures.
 
-### SR-02 — Real cloud topology would be disclosed to every authorized browser
+### SR-02 — Minimize real topology delivered to each authorized browser
 
 - **Severity:** High for real tenant data; Informational for current synthetic data
 - **Confidence:** High
 - **Affected:** `lib/cloudpen-data.ts`, `app/cloudpen-dashboard.tsx`
-- **Status:** Production blocker
+- **Status:** Partially remediated; pagination/field minimization remains a production gate
 
-**Description:** Accounts, asset names, attack paths, evidence observations, root causes, and remediation are imported by a client component. They are therefore present in browser-delivered JavaScript or rendered output.
+**Description:** The static catalog is now seeded into a server-owned D1 snapshot and passed by the authenticated server page. This removes hidden catalog data from the client bundle, but the current page still receives the complete authorized demo snapshot instead of paginated, purpose-minimized records.
 
-**Evidence:** The dashboard imports the synthetic catalog directly from `lib/cloudpen-data.ts`.
+**Evidence:** `getExposureCatalog()` reads workspace-scoped snapshot tables; `app/page.tsx` supplies that authorized projection to the client dashboard.
 
 **Exploitation scenario:** A future implementation replaces samples with real topology while retaining the client bundle. Any viewer or compromised browser downloads the full catalog, including paths not required for the active view.
 
 **Impact:** Sensitive topology disclosure, cross-workspace leakage if tenancy is added incorrectly, and valuable reconnaissance.
 
-**Recommended fix:** Keep only presentation types client-side. Query server-owned, workspace-scoped records through paginated APIs; authorize every query; minimize fields; classify and redact evidence; avoid preloading unrelated paths.
+**Recommended fix:** Preserve the server-owned model and add paginated/path-specific APIs before real ingestion. Minimize fields, classify and redact evidence, and avoid preloading paths unrelated to the current view.
 
 **Validation:** Search built client chunks for tenant account IDs, resource ARNs, evidence, and hidden records. Add tests that one workspace cannot enumerate another.
 
@@ -146,7 +153,7 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 - **Affected:** `lib/server/control-plane.ts`, D1 schema
 - **Status:** Production blocker for multi-tenancy
 
-**Description:** The service uses constant workspace `northstar-labs`. API requests do not select a workspace, which is safe for one private synthetic workspace but cannot support tenant isolation.
+**Description:** Every new product table and query is scoped to the configured workspace, and request bodies cannot select a workspace. The current deployment nevertheless supports one organization only and lacks server-derived multi-workspace selection, tenant-specific keys, lifecycle administration, and two-workspace negative tests.
 
 **Exploitation scenario:** Developers add workspace switching in the UI or ingest multiple tenants into shared tables without introducing server-derived tenant context and row-level authorization.
 
@@ -272,15 +279,34 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 
 **CWE/OWASP:** CWE-266; OWASP A01/A07.
 
+### SR-10 — Screenshot pixels and visible banner are client-generated and not source-attested
+
+- **Severity:** Medium when screenshots are used as formal audit evidence
+- **Confidence:** High
+- **Affected:** `app/cloudpen-dashboard.tsx`, `app/api/screenshots/route.ts`, `lib/server/control-plane.ts`
+- **Status:** Confirmed evidence-provenance limitation
+
+**Description:** The browser uses `getDisplayMedia`, draws the selected frame and banner to canvas, then uploads a PNG. The server validates authorization, catalog metadata, media signature, size, dimensions, timestamp window, and digest, but it cannot prove that the pixels came from the browser picker, that the banner matches the selected metadata, or that the image was not composed before upload. A user with `capture` capability can call the multipart endpoint directly with any valid PNG.
+
+**Exploitation scenario:** A malicious or compromised authorized reviewer creates a fabricated control screenshot, supplies a plausible title/control/timestamp, and presents the resulting audited D1/R2 record as proof that a control operated. SHA-256 protects the stored bytes after upload; it does not attest their truth at capture time.
+
+**Impact:** False compliance evidence, audit deception, and incorrect control conclusions. This does not grant application or cloud privilege by itself.
+
+**Recommended fix:** Treat screenshots as collector-submitted evidence, not automatically verified evidence. Add an independent reviewer approval state and evidence assertions, render or verify the banner server-side, record capture client/version and immutable receipt, and use a trusted desktop/runner capture agent with device identity and asymmetric attestation if source provenance is required. Preserve the original object and maintain a derived-display copy rather than silently rewriting evidence.
+
+**Validation:** Attempt direct API upload of a synthetic but valid PNG and confirm it is labeled unreviewed. Test that approval requires a distinct identity, metadata edits create new revisions, and any server-rendered banner exactly matches immutable D1 fields. For an attested agent, test nonce, device key, freshness, and replay rejection.
+
+**CWE/OWASP:** CWE-345; OWASP A04 Insecure Design.
+
 ## 6. Exploitation chains and combined risk
 
 ### Direct-origin exposure to administrator impersonation
 
 Direct Worker exposure + trusted raw identity header + known administrator email -> application administrator -> signed plan and connector requests. No cloud execution follows today, but future runner connectivity would turn this into a critical chain. The deployment boundary must be enforced before runner work.
 
-### Real topology plus compromised browser
+### Over-broad topology projection plus compromised browser
 
-Real data copied into the client catalog + viewer access or browser compromise -> download all bundled topology/evidence -> targeted cloud attack reconnaissance. Server-side data migration is required before real ingestion.
+Real data ingested without pagination/field minimization + viewer access or browser compromise -> download the full authorized workspace snapshot -> targeted cloud attack reconnaissance. Purpose-specific authorized queries are required before real ingestion.
 
 ### Control-plane secret plus database compromise
 
@@ -292,7 +318,7 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ## 7. Dependency and configuration risks
 
-- Dependency audit reported zero known vulnerabilities at the last validation, but this is time-sensitive and must run for each change/release.
+- The production dependency audit reports zero known vulnerabilities at the current validation. The full development audit reports two high-severity infinite-loop advisories in `image-size@2.0.2`, introduced only through the Vinext build tool. Upstream lists no patched `image-size` release as of August 11, 2026. The package is not imported by application code or included in `dist/server`; screenshot handling uses a bounded manual PNG signature/IHDR parser. A tested Vinext 0.0.45 downgrade removed the dependency but crashed the built Worker during stateful API traffic, so it was rejected. Treat repository image inputs as untrusted, keep the package out of the deployed artifact, monitor upstream, and upgrade as soon as Vinext can remove or patch it.
 - The lockfile is required. Do not publish installs produced without it.
 - CI actions are pinned to full SHAs and use read-only repository permissions.
 - Package install scripts remain a supply-chain execution surface; use trusted registries, review lockfile diffs, preserve provenance/SBOMs, and consider a package-install allowlist.
@@ -302,11 +328,11 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ## 8. Secure design gaps
 
-- Real discovery, path calculation, cloud execution, and runner enrollment do not exist.
-- Multi-tenant identity and storage isolation do not exist.
-- Approval capability is reserved but no two-person approval workflow exists.
+- Real AWS discovery, dynamic path calculation, and cloud execution do not exist.
+- Workspace scoping exists, but multi-organization identity, keys, lifecycle, and isolation tests do not.
+- Two-person control-plane approval exists; step-up authentication, nonces, and runner-bound asymmetric authorization do not.
 - No asymmetric signing, replay nonce store, verifier protocol, or key revocation exists.
-- No real topology/evidence ingestion or server-side pagination exists.
+- D1 snapshot ingestion exists for the demo seed; real collector ingestion and server-side pagination do not.
 - No retention, customer deletion/export, backup/restore, SIEM, or external audit anchor exists.
 - No SSO group/SCIM/step-up administration exists beyond Sites identity and environment lists.
 - No independent security assessment or production compliance evidence exists.
@@ -322,7 +348,7 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ### Phase 1 — Real control-plane readiness
 
-- Design tenant/workspace identity and migrate synthetic client data server-side.
+- Complete server-derived tenant/workspace identity and multi-tenant negative tests; the demo catalog is already server-owned.
 - Add paginated authorized APIs and isolation tests.
 - Implement automated audit verification, external anchoring, SIEM export, retention, backups, and restore exercises.
 - Replace static role lists with governed IdP groups and lifecycle controls.
@@ -351,7 +377,7 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ### Automated now
 
-Current tests cover identity redirect, authorized rendering, response headers, Host poisoning, CSRF, plan signing/non-execution, approval hold, guardrail protection, and RBAC. Artifact and dependency gates cover stale files, listener binding, hardening presence, and advisories.
+Current tests cover identity redirect, authorized rendering, response headers, Host poisoning, CSRF, plan signing/non-execution, approval separation, guardrail protection, RBAC, connector secret handling, non-executable discovery, evidence manifests, remediation state, pending runner enrollment, signed reports, and audit verification. Artifact and dependency gates cover stale files, listener binding, hardening presence, and advisories.
 
 ### Add before real data
 
@@ -386,7 +412,7 @@ Current tests cover identity redirect, authorized rendering, response headers, H
 - What are the recovery objectives, backup custody, SIEM, and incident-notification requirements?
 - Which independent assessor and launch criteria will approve the first runner pilot?
 
-Assumptions for this review: topology and evidence remain synthetic; access remains local or private Sites; the Sites dispatcher is trusted; no hidden runner or cloud credentials exist; and no other services write the D1 tables.
+Assumptions for this review: the exposure snapshot and generated attack-path evidence remain synthetic; screenshot evidence may contain real sensitive information; access remains local or private Sites; the Sites dispatcher is trusted; pending runner enrollment has no communication channel or cloud credentials; and no other services write the D1 or R2 records.
 
 ## Remediated findings from the prototype baseline
 
@@ -394,7 +420,7 @@ The following previously confirmed issues are fixed in the current working tree:
 
 - missing application authentication/RBAC;
 - client-only validation approval and execution simulation;
-- forgeable localStorage run history and browser-generated evidence;
+- forgeable localStorage run history and browser-authoritative validation evidence (user-submitted screenshots remain explicitly unverified collector evidence under SR-10);
 - known dependency advisories present in the earlier lockfile;
 - missing primary response security headers;
 - local service bound to all interfaces;

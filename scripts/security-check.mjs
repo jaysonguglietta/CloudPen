@@ -15,6 +15,7 @@ for (const file of forbiddenArtifacts) {
 const worker = await readFile("dist/server/index.js", "utf8");
 assert.doesNotMatch(worker, /Maya Chen/, "hard-coded operator identity leaked into the server bundle");
 assert.match(worker, /Content-Security-Policy/, "security headers are missing from the worker bundle");
+assert.doesNotMatch(worker, /image-size/, "build-only image parser leaked into the deployed worker bundle");
 
 const localStart = await readFile("scripts/start-local.mjs", "utf8");
 assert.match(localStart, /"--ip", "127\.0\.0\.1"/, "local server must bind to loopback");

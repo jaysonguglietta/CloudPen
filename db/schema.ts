@@ -4,6 +4,7 @@ import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core
 export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  dataMode: text("data_mode", { enum: ["demo", "live"] }).notNull().default("demo"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -37,14 +38,153 @@ export const validationRuns = sqliteTable("validation_runs", {
   attackPathId: text("attack_path_id").notNull(),
   name: text("name").notNull(),
   mode: text("mode", { enum: ["Read-only", "Active canary"] }).notNull(),
-  status: text("status", { enum: ["Planned", "Awaiting approval", "Stopped", "Completed"] }).notNull(),
+  status: text("status", { enum: ["Planned", "Awaiting approval", "Approved", "Rejected", "Expired", "Stopped", "Completed"] }).notNull(),
   requestedBy: text("requested_by").notNull(),
   approvedBy: text("approved_by"),
   authorizationDigest: text("authorization_digest").notNull(),
   planSignature: text("plan_signature").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  decisionReason: text("decision_reason"),
   findings: integer("findings").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const connectors = sqliteTable(
+  "connectors",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    provider: text("provider", { enum: ["AWS"] }).notNull().default("AWS"),
+    name: text("name").notNull(),
+    accountId: text("account_id").notNull(),
+    status: text("status", { enum: ["Draft", "Awaiting verification", "Verified", "Runner required", "Disabled", "Error"] }).notNull(),
+    externalIdDigest: text("external_id_digest").notNull(),
+    externalIdHint: text("external_id_hint").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    lastSyncAt: text("last_sync_at"),
+    errorMessage: text("error_message"),
+  },
+  (table) => [uniqueIndex("connector_workspace_account").on(table.workspaceId, table.accountId)],
+);
+
+export const evidencePackages = sqliteTable("evidence_packages", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  pathId: text("path_id").notNull(),
+  classification: text("classification").notNull(),
+  digest: text("digest").notNull(),
+  signature: text("signature").notNull(),
+  keyId: text("key_id").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const remediations = sqliteTable("remediations", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  pathId: text("path_id").notNull(),
+  title: text("title").notNull(),
+  status: text("status", { enum: ["Open", "In progress", "Risk accepted", "Ready to revalidate", "Closed"] }).notNull(),
+  priority: text("priority", { enum: ["Critical", "High", "Medium", "Low"] }).notNull(),
+  owner: text("owner").notNull(),
+  dueAt: text("due_at").notNull(),
+  guidance: text("guidance").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const discoveryJobs = sqliteTable("discovery_jobs", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  connectorId: text("connector_id").notNull(),
+  status: text("status", { enum: ["Planned", "Runner required", "Completed", "Failed"] }).notNull(),
+  scopeJson: text("scope_json").notNull(),
+  executable: integer("executable", { mode: "boolean" }).notNull().default(false),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const runnerEnrollments = sqliteTable("runner_enrollments", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  name: text("name").notNull(),
+  status: text("status", { enum: ["Pending", "Disabled"] }).notNull(),
+  publicKeyFingerprint: text("public_key_fingerprint").notNull(),
+  executable: integer("executable", { mode: "boolean" }).notNull().default(false),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const exposureSnapshots = sqliteTable("exposure_snapshots", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  source: text("source", { enum: ["demo-seed", "aws-read-only"] }).notNull(),
+  status: text("status", { enum: ["Complete", "Partial"] }).notNull(),
+  collectedAt: text("collected_at").notNull(),
+});
+
+export const cloudAccounts = sqliteTable(
+  "cloud_accounts",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    snapshotId: text("snapshot_id").notNull(),
+    providerAccountId: text("provider_account_id").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [uniqueIndex("cloud_account_workspace_provider_id").on(table.workspaceId, table.providerAccountId)],
+);
+
+export const cloudAssets = sqliteTable("cloud_assets", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  snapshotId: text("snapshot_id").notNull(),
+  dataJson: text("data_json").notNull(),
+});
+
+export const exposurePaths = sqliteTable("exposure_paths", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  snapshotId: text("snapshot_id").notNull(),
+  dataJson: text("data_json").notNull(),
+});
+
+export const graphEdges = sqliteTable("graph_edges", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  snapshotId: text("snapshot_id").notNull(),
+  sourceNode: text("source_node").notNull(),
+  targetNode: text("target_node").notNull(),
+  relationship: text("relationship").notNull(),
+  evidenceJson: text("evidence_json").notNull(),
+});
+
+export const screenshotEvidence = sqliteTable("screenshot_evidence", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  frameworkId: text("framework_id").notNull(),
+  frameworkLabel: text("framework_label").notNull(),
+  controlId: text("control_id").notNull(),
+  controlLabel: text("control_label").notNull(),
+  title: text("title").notNull(),
+  notes: text("notes").notNull().default(""),
+  storedFilename: text("stored_filename").notNull(),
+  objectKey: text("object_key").notNull().unique(),
+  folderPath: text("folder_path").notNull(),
+  bannerPosition: text("banner_position", { enum: ["top", "bottom"] }).notNull(),
+  includeTimestamp: integer("include_timestamp", { mode: "boolean" }).notNull().default(true),
+  includeActor: integer("include_actor", { mode: "boolean" }).notNull().default(true),
+  capturedAt: text("captured_at").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  sha256Digest: text("sha256_digest").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 export const auditEvents = sqliteTable("audit_events", {

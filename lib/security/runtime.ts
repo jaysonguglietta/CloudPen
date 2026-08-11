@@ -2,6 +2,7 @@ export type CloudPenRole = "admin" | "operator" | "reviewer" | "viewer";
 
 export type RuntimeBindings = {
   DB?: D1Database;
+  EVIDENCE?: R2Bucket;
   CLOUDPEN_ADMIN_EMAILS?: string;
   CLOUDPEN_OPERATOR_EMAILS?: string;
   CLOUDPEN_REVIEWER_EMAILS?: string;
