@@ -4,6 +4,12 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 ## Unreleased
 
+No changes yet.
+
+## 0.2.0-rc.1 — 2026-08-11
+
+> Synthetic/private evaluation prerelease. CloudPen remains a non-executable control plane: it does not connect to AWS APIs, hold cloud credentials, or authorize a runner. It is not approved for production tenants or real customer data.
+
 ### Added
 
 - Private identity integration with application-level `admin`, `operator`, `reviewer`, and `viewer` roles.
@@ -21,7 +27,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 - Validation actions now create non-executable server-owned plans instead of simulating runs in browser storage.
 - Active-canary requests now stop in `Awaiting approval` and cannot reach a runner.
-- Connector submissions record a request and External ID digest without creating AWS trust or storing credentials.
+- Connector submissions validate a one-time External ID and immediately discard it without retaining the raw value, a display hint, or a reusable digest.
 - Reviewer/admin decisions now enforce requester/approver separation and remain non-executable.
 - Placeholder remediation, approval, help, report, connector, and policy-export actions now invoke durable server workflows.
 - Evidence export is server-owned, redacted, signed, non-cacheable, and audit logged.
