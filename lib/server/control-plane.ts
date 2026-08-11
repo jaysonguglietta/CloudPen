@@ -10,7 +10,7 @@ import {
   type RunnerRecord,
   type ValidationRun,
 } from "../cloudpen-data";
-import type { AuthorizedUser } from "../security/authorization";
+import { AuthorizationError, type AuthorizedUser } from "../security/authorization";
 import { runtimeBindings, signingKey } from "../security/runtime";
 
 const WORKSPACE_ID = "northstar-labs";
@@ -93,12 +93,11 @@ export async function createValidationPlan(
   const authorizationDigest = await sha256(canonicalPlan);
   const planSignature = await hmac(canonicalPlan);
 
-  await db.prepare(`INSERT INTO validation_runs
-    (id, workspace_id, attack_path_id, name, mode, status, requested_by, authorization_digest, plan_signature, expires_at, findings, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
-    .bind(id, WORKSPACE_ID, path.id, `${path.id} · ${path.title}`, input.mode, status, user.email, authorizationDigest, planSignature, plan.expiresAt, createdAt, createdAt)
-    .run();
-  await appendAuditEvent(db, user.email, "validation.plan.created", id, {
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO validation_runs
+      (id, workspace_id, attack_path_id, name, mode, status, requested_by, authorization_digest, plan_signature, expires_at, findings, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
+    .bind(id, WORKSPACE_ID, path.id, `${path.id} · ${path.title}`, input.mode, status, user.email, authorizationDigest, planSignature, plan.expiresAt, createdAt, createdAt),
+  user.email, "validation.plan.created", id, {
     attackPathId: path.id,
     mode: input.mode,
     status,
@@ -162,12 +161,11 @@ export async function updateGuardrailPolicy(
   if (!next.requireApproval || !next.canaryOnly || !next.redactEvidence || !next.cleanupRequired) {
     throw new ValidationError("Core production safety controls cannot be disabled in this release.");
   }
-  await db.prepare(`UPDATE guardrail_policies SET require_approval = ?, canary_only = ?, redact_evidence = ?,
+  await runAuditedMutation(db, () => db.prepare(`UPDATE guardrail_policies SET require_approval = ?, canary_only = ?, redact_evidence = ?,
       cleanup_required = ?, updated_by = ?, updated_at = ? WHERE workspace_id = ?`)
     .bind(next.requireApproval ? 1 : 0, next.canaryOnly ? 1 : 0, next.redactEvidence ? 1 : 0,
-      next.cleanupRequired ? 1 : 0, user.email, new Date().toISOString(), WORKSPACE_ID)
-    .run();
-  await appendAuditEvent(db, user.email, "guardrail.policy.updated", WORKSPACE_ID, next);
+      next.cleanupRequired ? 1 : 0, user.email, new Date().toISOString(), WORKSPACE_ID),
+  user.email, "guardrail.policy.updated", WORKSPACE_ID, next);
   return next;
 }
 
@@ -197,12 +195,11 @@ export async function createEvidencePackage(user: AuthorizedUser, attackPathId: 
   const digest = await sha256(canonical);
   const signature = await hmac(canonical);
   const packageId = `EV-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-  await db.prepare(`INSERT INTO evidence_packages
-    (id, workspace_id, path_id, classification, digest, signature, key_id, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(packageId, WORKSPACE_ID, path.id, payload.classification, digest, signature, "cloudpen-plan-v1", user.email, issuedAt)
-    .run();
-  await appendAuditEvent(db, user.email, "evidence.exported", path.id, { digest });
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO evidence_packages
+      (id, workspace_id, path_id, classification, digest, signature, key_id, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(packageId, WORKSPACE_ID, path.id, payload.classification, digest, signature, "cloudpen-plan-v1", user.email, issuedAt),
+  user.email, "evidence.exported", path.id, { digest });
   return { packageId, payload, integrity: { algorithm: "HMAC-SHA-256", keyId: "cloudpen-plan-v1", digest, signature } };
 }
 
@@ -218,12 +215,11 @@ export async function recordConnectorRequest(
   const id = `CON-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const createdAt = new Date().toISOString();
   const externalIdDigest = await sha256(input.externalId);
-  await db.prepare(`INSERT INTO connectors
-    (id, workspace_id, provider, name, account_id, status, external_id_digest, external_id_hint, created_by, created_at, updated_at)
-    VALUES (?, ?, 'AWS', ?, ?, 'Runner required', ?, ?, ?, ?, ?)`)
-    .bind(id, WORKSPACE_ID, input.name, input.accountId, externalIdDigest, `••••${input.externalId.slice(-4)}`, user.email, createdAt, createdAt)
-    .run();
-  await appendAuditEvent(db, user.email, "connector.requested", id, {
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO connectors
+      (id, workspace_id, provider, name, account_id, status, external_id_digest, external_id_hint, created_by, created_at, updated_at)
+      VALUES (?, ?, 'AWS', ?, ?, 'Runner required', ?, ?, ?, ?, ?)`)
+    .bind(id, WORKSPACE_ID, input.name, input.accountId, externalIdDigest, `••••${input.externalId.slice(-4)}`, user.email, createdAt, createdAt),
+  user.email, "connector.requested", id, {
     name: input.name,
     accountId: input.accountId,
     externalIdDigest,
@@ -268,7 +264,8 @@ export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<Con
     db.prepare(`SELECT id, path_id, classification, digest, key_id, created_by, created_at
       FROM evidence_packages WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 100`)
       .bind(WORKSPACE_ID).all<Record<string, unknown>>(),
-    db.prepare(`SELECT id, path_id, title, status, priority, owner, due_at, guidance, created_at, updated_at
+    db.prepare(`SELECT id, path_id, title, status, priority, owner, due_at, guidance, created_at, updated_at,
+      version, transition_reason, risk_accepted_by, risk_acceptance_reason, risk_acceptance_expires_at, revalidation_evidence_id
       FROM remediations WHERE workspace_id = ? ORDER BY updated_at DESC LIMIT 100`)
       .bind(WORKSPACE_ID).all<Record<string, unknown>>(),
     db.prepare(`SELECT id, actor_email, action, target, previous_hash, event_hash, created_at
@@ -294,6 +291,11 @@ export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<Con
     status: row.status as RemediationRecord["status"], priority: row.priority as RemediationRecord["priority"],
     owner: String(row.owner), dueAt: String(row.due_at), guidance: String(row.guidance),
     createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    version: Number(row.version), transitionReason: row.transition_reason ? String(row.transition_reason) : null,
+    riskAcceptedBy: row.risk_accepted_by ? String(row.risk_accepted_by) : null,
+    riskAcceptanceReason: row.risk_acceptance_reason ? String(row.risk_acceptance_reason) : null,
+    riskAcceptanceExpiresAt: row.risk_acceptance_expires_at ? String(row.risk_acceptance_expires_at) : null,
+    revalidationEvidenceId: row.revalidation_evidence_id ? String(row.revalidation_evidence_id) : null,
   }));
   const audit: AuditRecord[] = auditRows.results.map((row) => ({
     id: String(row.id), actorEmail: String(row.actor_email), action: String(row.action), target: String(row.target),
@@ -323,11 +325,11 @@ export async function createRunnerEnrollment(
     name: input.name, status: "Pending", publicKeyFingerprint: input.publicKeyFingerprint,
     executable: false, createdBy: user.email, createdAt: now,
   };
-  await db.prepare(`INSERT INTO runner_enrollments
-    (id, workspace_id, name, status, public_key_fingerprint, executable, created_by, created_at)
-    VALUES (?, ?, ?, 'Pending', ?, 0, ?, ?)`)
-    .bind(record.id, WORKSPACE_ID, record.name, record.publicKeyFingerprint, user.email, now).run();
-  await appendAuditEvent(db, user.email, "runner.enrollment.requested", record.id, {
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO runner_enrollments
+      (id, workspace_id, name, status, public_key_fingerprint, executable, created_by, created_at)
+      VALUES (?, ?, ?, 'Pending', ?, 0, ?, ?)`)
+    .bind(record.id, WORKSPACE_ID, record.name, record.publicKeyFingerprint, user.email, now),
+  user.email, "runner.enrollment.requested", record.id, {
     publicKeyFingerprint: record.publicKeyFingerprint, status: record.status, executable: false,
   });
   return record;
@@ -390,10 +392,14 @@ export async function decideValidationRun(
   }
   const status = decision === "approve" ? "Approved" : decision === "reject" ? "Rejected" : "Stopped";
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE validation_runs SET status = ?, approved_by = ?, decision_reason = ?, updated_at = ?
-    WHERE id = ? AND workspace_id = ?`)
-    .bind(status, decision === "cancel" ? null : user.email, reason, now, runId, WORKSPACE_ID).run();
-  await appendAuditEvent(db, user.email, `validation.plan.${decision}d`, runId, { status, reason, executable: false });
+  const allowedStatuses = decision === "cancel" ? ["Planned", "Awaiting approval", "Approved"] : ["Awaiting approval"];
+  const placeholders = allowedStatuses.map(() => "?").join(", ");
+  const result = await runAuditedMutation(db, () => db.prepare(`UPDATE validation_runs
+      SET status = ?, approved_by = ?, decision_reason = ?, updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND status IN (${placeholders}) AND expires_at > ?`)
+    .bind(status, decision === "cancel" ? null : user.email, reason, now, runId, WORKSPACE_ID, ...allowedStatuses, now),
+  user.email, `validation.plan.${decision}d`, runId, { status, reason, executable: false });
+  if (!result.meta.changes) throw new ConflictError("The plan changed or expired before this decision was committed.");
 }
 
 export async function createRemediation(
@@ -412,27 +418,93 @@ export async function createRemediation(
     id: `REM-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
     pathId: path.id, title: `Restrict access for ${path.title}`, status: "Open", priority: path.severity,
     owner: input.owner, dueAt: input.dueAt, guidance: path.remediation, createdAt: now, updatedAt: now,
+    version: 1, transitionReason: null, riskAcceptedBy: null, riskAcceptanceReason: null,
+    riskAcceptanceExpiresAt: null, revalidationEvidenceId: null,
   };
-  await db.prepare(`INSERT INTO remediations
-    (id, workspace_id, path_id, title, status, priority, owner, due_at, guidance, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO remediations
+      (id, workspace_id, path_id, title, status, priority, owner, due_at, guidance, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(record.id, WORKSPACE_ID, record.pathId, record.title, record.status, record.priority, record.owner,
-      record.dueAt, record.guidance, user.email, now, now).run();
-  await appendAuditEvent(db, user.email, "remediation.created", record.id, { pathId: path.id, owner: input.owner, dueAt: input.dueAt });
+      record.dueAt, record.guidance, user.email, now, now),
+  user.email, "remediation.created", record.id, { pathId: path.id, owner: input.owner, dueAt: input.dueAt });
   return record;
 }
 
 export async function updateRemediation(
   user: AuthorizedUser,
   id: string,
-  input: { status: RemediationRecord["status"] },
+  input: {
+    status: RemediationRecord["status"];
+    version: number;
+    reason: string;
+    riskAcceptanceExpiresAt: string | null;
+    revalidationEvidenceId: string | null;
+  },
 ): Promise<void> {
   const db = database();
   await enforceRateLimit(db, `remediation-update:${user.email.toLowerCase()}`, 60, 60);
-  const result = await db.prepare("UPDATE remediations SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?")
-    .bind(input.status, new Date().toISOString(), id, WORKSPACE_ID).run();
-  if (!result.meta.changes) throw new NotFoundError("Remediation not found.");
-  await appendAuditEvent(db, user.email, "remediation.status.updated", id, input);
+  if (input.reason.trim().length < 8 || input.reason.trim().length > 500) {
+    throw new ValidationError("A decision reason between 8 and 500 characters is required.");
+  }
+  if (input.status === "Risk accepted" && user.role !== "admin") {
+    throw new AuthorizationError(403, "Only administrators may accept remediation risk.");
+  }
+  if (input.status === "Closed" && user.role !== "admin" && user.role !== "reviewer") {
+    throw new AuthorizationError(403, "Only administrators or reviewers may close a remediation.");
+  }
+  if (input.status !== "Risk accepted" && input.status !== "Closed" && user.role !== "admin" && user.role !== "operator") {
+    throw new AuthorizationError(403, "Only administrators or operators may update remediation progress.");
+  }
+  const current = await db.prepare("SELECT status, version, path_id FROM remediations WHERE id = ? AND workspace_id = ?")
+    .bind(id, WORKSPACE_ID).first<{ status: RemediationRecord["status"]; version: number; path_id: string }>();
+  if (!current) throw new NotFoundError("Remediation not found.");
+  if (current.version !== input.version) throw new ConflictError("The remediation has changed. Refresh it before retrying.");
+  const transitions: Record<RemediationRecord["status"], ReadonlySet<RemediationRecord["status"]>> = {
+    Open: new Set(["In progress", "Risk accepted"]),
+    "In progress": new Set(["Risk accepted", "Ready to revalidate"]),
+    "Risk accepted": new Set(["In progress"]),
+    "Ready to revalidate": new Set(["In progress", "Closed"]),
+    Closed: new Set(),
+  };
+  if (!transitions[current.status].has(input.status)) {
+    throw new ConflictError(`A remediation cannot move from ${current.status} to ${input.status}.`);
+  }
+  const now = new Date().toISOString();
+  let riskExpiry: string | null = null;
+  let evidenceId: string | null = null;
+  if (input.status === "Risk accepted") {
+    const expiry = input.riskAcceptanceExpiresAt ? new Date(input.riskAcceptanceExpiresAt) : null;
+    if (!expiry || Number.isNaN(expiry.valueOf()) || expiry <= new Date() || expiry.valueOf() > Date.now() + 365 * 86_400_000) {
+      throw new ValidationError("Risk acceptance requires an expiry within the next 365 days.");
+    }
+    riskExpiry = expiry.toISOString();
+  }
+  if (input.status === "Closed") {
+    evidenceId = input.revalidationEvidenceId;
+    const evidence = evidenceId ? await db.prepare(`SELECT id FROM evidence_packages
+      WHERE id = ? AND workspace_id = ? AND path_id = ?`).bind(evidenceId, WORKSPACE_ID, current.path_id).first<{ id: string }>() : null;
+    if (!evidence) throw new ConflictError("Closure requires retained revalidation evidence for this attack path.");
+  }
+  const details = {
+    from: current.status,
+    to: input.status,
+    reason: input.reason,
+    previousVersion: current.version,
+    nextVersion: current.version + 1,
+    riskAcceptedBy: input.status === "Risk accepted" ? user.email : null,
+    riskAcceptanceExpiresAt: riskExpiry,
+    revalidationEvidenceId: evidenceId,
+  };
+  const result = await runAuditedMutation(db, () => db.prepare(`UPDATE remediations SET
+      status = ?, updated_at = ?, version = version + 1, transition_reason = ?,
+      risk_accepted_by = ?, risk_acceptance_reason = ?, risk_acceptance_expires_at = ?, revalidation_evidence_id = ?
+      WHERE id = ? AND workspace_id = ? AND status = ? AND version = ?`)
+    .bind(input.status, now, input.reason,
+      input.status === "Risk accepted" ? user.email : null,
+      input.status === "Risk accepted" ? input.reason : null,
+      riskExpiry, evidenceId, id, WORKSPACE_ID, current.status, current.version),
+  user.email, "remediation.status.updated", id, details);
+  if (!result.meta.changes) throw new ConflictError("The remediation changed before this transition was committed.");
 }
 
 export async function createDiscoveryPlan(user: AuthorizedUser, connectorId: string) {
@@ -443,10 +515,11 @@ export async function createDiscoveryPlan(user: AuthorizedUser, connectorId: str
   if (!connector || connector.status === "Disabled") throw new NotFoundError("Active connector not found.");
   const id = `DISC-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const scope = { provider: "AWS", accountId: connector.account_id, mode: "metadata-read-only", services: ["iam", "organizations", "s3", "lambda", "kms", "ec2", "ecr", "ecs"], executable: false };
-  await db.prepare(`INSERT INTO discovery_jobs (id, workspace_id, connector_id, status, scope_json, executable, created_by, created_at)
-    VALUES (?, ?, ?, 'Runner required', ?, 0, ?, ?)`)
-    .bind(id, WORKSPACE_ID, connectorId, canonicalJson(scope), user.email, new Date().toISOString()).run();
-  await appendAuditEvent(db, user.email, "discovery.plan.created", id, scope);
+  await runAuditedMutation(db, () => db.prepare(`INSERT INTO discovery_jobs
+      (id, workspace_id, connector_id, status, scope_json, executable, created_by, created_at)
+      VALUES (?, ?, ?, 'Runner required', ?, 0, ?, ?)`)
+    .bind(id, WORKSPACE_ID, connectorId, canonicalJson(scope), user.email, new Date().toISOString()),
+  user.email, "discovery.plan.created", id, scope);
   return { id, status: "Runner required", scope };
 }
 
@@ -471,10 +544,16 @@ async function expireStalePlans(db: D1Database): Promise<void> {
 }
 
 async function verifyAuditChain(db: D1Database): Promise<boolean> {
-  const rows = await db.prepare(`SELECT id, actor_email, action, target, details_json, previous_hash, event_hash, created_at
-    FROM audit_events WHERE workspace_id = ? LIMIT 1000`)
-    .bind(WORKSPACE_ID).all<Record<string, unknown>>();
-  const byPrevious = new Map(rows.results.map((row) => [String(row.previous_hash), row]));
+  const rows: Record<string, unknown>[] = [];
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await db.prepare(`SELECT id, actor_email, action, target, details_json, previous_hash, event_hash, created_at
+      FROM audit_events WHERE workspace_id = ? ORDER BY created_at, id LIMIT ? OFFSET ?`)
+      .bind(WORKSPACE_ID, pageSize, offset).all<Record<string, unknown>>();
+    rows.push(...page.results);
+    if (page.results.length < pageSize) break;
+  }
+  const byPrevious = new Map(rows.map((row) => [String(row.previous_hash), row]));
   let previousHash = "GENESIS";
   let visited = 0;
   while (byPrevious.has(previousHash)) {
@@ -491,7 +570,7 @@ async function verifyAuditChain(db: D1Database): Promise<boolean> {
     previousHash = String(row.event_hash);
     visited += 1;
   }
-  return visited === rows.results.length;
+  return visited === rows.length;
 }
 
 async function enforceRateLimit(db: D1Database, key: string, limit: number, windowSeconds: number): Promise<void> {
@@ -514,6 +593,45 @@ async function appendAuditEvent(
   target: string,
   details: unknown,
 ): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const statement = await prepareAuditInsert(db, actorEmail, action, target, details, false);
+    try {
+      await statement.run();
+      return;
+    } catch (error) {
+      if (!isAuditChainRace(error) || attempt === 3) throw error;
+    }
+  }
+}
+
+async function runAuditedMutation(
+  db: D1Database,
+  mutation: () => D1PreparedStatement,
+  actorEmail: string,
+  action: string,
+  target: string,
+  details: unknown,
+): Promise<D1Result> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const audit = await prepareAuditInsert(db, actorEmail, action, target, details, true);
+    try {
+      const [result] = await db.batch([mutation(), audit]);
+      return result;
+    } catch (error) {
+      if (!isAuditChainRace(error) || attempt === 3) throw error;
+    }
+  }
+  throw new Error("The audited mutation could not be committed.");
+}
+
+async function prepareAuditInsert(
+  db: D1Database,
+  actorEmail: string,
+  action: string,
+  target: string,
+  details: unknown,
+  requireChangedRow: boolean,
+): Promise<D1PreparedStatement> {
   const previous = await db.prepare(`SELECT parent.event_hash FROM audit_events parent
       WHERE parent.workspace_id = ? AND NOT EXISTS (
         SELECT 1 FROM audit_events child WHERE child.workspace_id = parent.workspace_id AND child.previous_hash = parent.event_hash
@@ -531,11 +649,15 @@ async function appendAuditEvent(
     createdAt: new Date().toISOString(),
   };
   const eventHash = await sha256(canonicalJson(event));
-  await db.prepare(`INSERT INTO audit_events
-    (id, workspace_id, actor_email, action, target, details_json, previous_hash, event_hash, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(event.id, WORKSPACE_ID, event.actorEmail, action, target, canonicalJson(details), event.previousHash, eventHash, event.createdAt)
-    .run();
+  const predicate = requireChangedRow ? " WHERE changes() = 1" : "";
+  return db.prepare(`INSERT INTO audit_events
+      (id, workspace_id, actor_email, action, target, details_json, previous_hash, event_hash, created_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?${predicate}`)
+    .bind(event.id, WORKSPACE_ID, event.actorEmail, action, target, canonicalJson(details), event.previousHash, eventHash, event.createdAt);
+}
+
+function isAuditChainRace(error: unknown): boolean {
+  return /UNIQUE constraint failed: audit_events\.workspace_id, audit_events\.previous_hash/i.test(String(error));
 }
 
 function database(): D1Database {

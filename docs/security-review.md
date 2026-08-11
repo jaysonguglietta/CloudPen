@@ -88,7 +88,7 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 | D1 | Prepared statements, workspace predicates, constraints, indexes | One configured organization and admin-level tampering remain |
 | Plan creation | Server timestamps/status, enforced policy, expiry, digest/HMAC, non-executable | HMAC shared secret and no verifier/runner protocol |
 | Evidence | Server-generated, redacted fields, signed, non-cacheable, manifest-retained, audited | Synthetic only; retention and asymmetric verification absent |
-| Approval | Distinct reviewer/admin, required reason, expiry, audited transition | Approved intent remains non-executable; no step-up or nonce protocol |
+| Approval | Distinct reviewer/admin, required reason, expiry, compare-and-set audited transition | Approved intent remains non-executable; no step-up or nonce protocol |
 | Discovery/runner staging | Service allowlist, pinned fingerprint, database `executable = 0` | No ownership proof, workload identity, delivery, or collector exists |
 | Audit | Application append-only hash chain, branch-prevention index | No external anchor; DB admin can rewrite full chain |
 | Rate limiting | D1 per-email counters on primary operations | No edge/global anonymous limiter documented |
@@ -354,7 +354,7 @@ Existing plan UI + new AWS SDK/control-plane credentials without runner protocol
 
 ### Automated now
 
-Current tests cover identity redirect, authorized rendering, response headers, Host poisoning, CSRF, plan signing/non-execution, approval separation, guardrail protection, RBAC, connector secret handling, non-executable discovery, evidence manifests, remediation state, pending runner enrollment, signed reports, and audit verification. Artifact and dependency gates cover stale files, listener binding, hardening presence, and advisories.
+Current tests cover identity redirect, authorized rendering, response headers, direct-origin rejection, CSRF, body-stream limits, plan signing/non-execution, approval separation and concurrent decisions, governed remediation transitions, guardrail protection, RBAC, connector secret handling, non-executable discovery, evidence manifests, pending runner enrollment, signed reports, and audit verification. Artifact and dependency gates cover stale files, listener binding, hardening presence, and advisories.
 
 ### Add before real data
 
