@@ -70,6 +70,12 @@ Current packages identify key `cloudpen-plan-v1`, but the code supports one acti
 
 Do not keep retired keys in source or general environment files. Multi-key verification and asymmetric KMS signing are required before production evidence workflows.
 
+## Connector External ID rotation
+
+External IDs are one-time customer-controlled values in this non-executable release. Creation and rotation generate 256 random bits in the browser; the API validates the `cpv1_` envelope and immediately discards it without storing a hint or digest. Operators must copy the value before committing the dialog, update the AWS role trust condition through the customer's approved change process, and then re-run ownership verification when a future runner supports it.
+
+Rotation returns the connector to `Runner required` and records only actor, connector, time, and `externalIdStatus: not-retained`. The migration from earlier builds deliberately drops stored SHA-256 digests and hints. If a copied value is lost, generate another rotation value; it cannot be recovered from CloudPen. Disable the AWS trust relationship directly during revocation or suspected exposure because this control plane holds no credential and cannot revoke it remotely.
+
 ## Audit-chain verification
 
 The application writes canonical event hashes linked by `previous_hash`. Operational verification should:
