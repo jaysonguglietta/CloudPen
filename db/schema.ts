@@ -82,20 +82,34 @@ export const evidencePackages = sqliteTable("evidence_packages", {
   createdAt: text("created_at").notNull(),
 });
 
-export const remediations = sqliteTable("remediations", {
-  id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  pathId: text("path_id").notNull(),
-  title: text("title").notNull(),
-  status: text("status", { enum: ["Open", "In progress", "Risk accepted", "Ready to revalidate", "Closed"] }).notNull(),
-  priority: text("priority", { enum: ["Critical", "High", "Medium", "Low"] }).notNull(),
-  owner: text("owner").notNull(),
-  dueAt: text("due_at").notNull(),
-  guidance: text("guidance").notNull(),
-  createdBy: text("created_by").notNull(),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const remediations = sqliteTable(
+  "remediations",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    pathId: text("path_id").notNull(),
+    title: text("title").notNull(),
+    status: text("status", { enum: ["Open", "In progress", "Risk accepted", "Ready to revalidate", "Closed"] }).notNull(),
+    priority: text("priority", { enum: ["Critical", "High", "Medium", "Low"] }).notNull(),
+    owner: text("owner").notNull(),
+    dueAt: text("due_at").notNull(),
+    guidance: text("guidance").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    version: integer("version").notNull().default(1),
+    transitionReason: text("transition_reason"),
+    riskAcceptedBy: text("risk_accepted_by"),
+    riskAcceptanceReason: text("risk_acceptance_reason"),
+    riskAcceptanceExpiresAt: text("risk_acceptance_expires_at"),
+    revalidationEvidenceId: text("revalidation_evidence_id"),
+  },
+  (table) => [
+    uniqueIndex("remediation_workspace_open_path")
+      .on(table.workspaceId, table.pathId)
+      .where(sql`${table.status} != 'Closed'`),
+  ],
+);
 
 export const discoveryJobs = sqliteTable("discovery_jobs", {
   id: text("id").primaryKey(),

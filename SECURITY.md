@@ -11,6 +11,8 @@ CloudPen is a security-validation control plane. It does not currently execute A
 - Active canary plans enter `Awaiting approval`; the requester cannot cause execution.
 - State-changing exports use same-origin `POST` requests. Evidence exports are generated server-side, redacted, signed, and logged.
 - Audit events form an append-only hash chain in D1.
+- Security-relevant mutations and audit events commit atomically; plan decisions and remediation changes use compare-and-set concurrency controls.
+- Remediation risk acceptance is administrator-only and expiring; closure requires signed evidence for the same attack path and reviewer/administrator authority.
 - Production safety controls cannot be disabled through the API.
 - Security headers, clean build outputs, dependency auditing, tests, and CI gates are enforced.
 

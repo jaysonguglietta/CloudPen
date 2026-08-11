@@ -118,6 +118,12 @@ export type RemediationRecord = {
   guidance: string;
   createdAt: string;
   updatedAt: string;
+  version: number;
+  transitionReason: string | null;
+  riskAcceptedBy: string | null;
+  riskAcceptanceReason: string | null;
+  riskAcceptanceExpiresAt: string | null;
+  revalidationEvidenceId: string | null;
 };
 
 export type AuditRecord = {

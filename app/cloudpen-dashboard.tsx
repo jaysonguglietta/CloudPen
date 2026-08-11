@@ -174,7 +174,7 @@ export default function CloudPenDashboard({
   const [auditChainValid, setAuditChainValid] = useState(true);
   const [dataMode, setDataMode] = useState<"demo" | "live">("demo");
   const [loadingControlPlane, setLoadingControlPlane] = useState(true);
-  const [modal, setModal] = useState<"validate" | "connect" | "remediate" | "run" | null>(null);
+  const [modal, setModal] = useState<"validate" | "connect" | "remediate" | "remediation-transition" | "run" | null>(null);
   const [selectedRun, setSelectedRun] = useState<ValidationRun | null>(null);
   const [decisionReason, setDecisionReason] = useState("");
   const [validationMode, setValidationMode] = useState<"Read-only" | "Active canary">("Read-only");
@@ -188,6 +188,13 @@ export default function CloudPenDashboard({
   const [accountError, setAccountError] = useState("");
   const [remediationForm, setRemediationForm] = useState({ owner: "", dueAt: "" });
   const [remediationError, setRemediationError] = useState("");
+  const [selectedRemediation, setSelectedRemediation] = useState<RemediationRecord | null>(null);
+  const [remediationTransition, setRemediationTransition] = useState({
+    status: "In progress" as RemediationRecord["status"],
+    reason: "",
+    riskAcceptanceExpiresAt: "",
+    revalidationEvidenceId: "",
+  });
   const [runnerForm, setRunnerForm] = useState({ name: "", fingerprint: "" });
   const [runnerError, setRunnerError] = useState("");
   const [guardrails, setGuardrails] = useState({
@@ -200,6 +207,7 @@ export default function CloudPenDashboard({
   const canConfigure = currentUser.role === "admin";
   const canConnect = currentUser.role === "admin" || currentUser.role === "operator";
   const canApprove = currentUser.role === "admin" || currentUser.role === "reviewer";
+  const canRemediate = canPlan || currentUser.role === "reviewer";
 
   useEffect(() => {
     let cancelled = false;
@@ -454,19 +462,54 @@ export default function CloudPenDashboard({
     }
   }
 
-  async function updateRemediationStatus(record: RemediationRecord, status: RemediationRecord["status"]) {
+  function allowedRemediationTransitions(record: RemediationRecord) {
+    const transitions: Record<RemediationRecord["status"], RemediationRecord["status"][]> = {
+      Open: ["In progress", "Risk accepted"],
+      "In progress": ["Risk accepted", "Ready to revalidate"],
+      "Risk accepted": ["In progress"],
+      "Ready to revalidate": ["In progress", "Closed"],
+      Closed: [],
+    };
+    return transitions[record.status].filter((status) => {
+      if (status === "Risk accepted") return currentUser.role === "admin";
+      if (status === "Closed") return currentUser.role === "admin" || currentUser.role === "reviewer";
+      return canPlan;
+    });
+  }
+
+  function openRemediationTransition(record: RemediationRecord) {
+    const allowed = allowedRemediationTransitions(record);
+    if (!allowed.length) return;
+    const riskDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    setSelectedRemediation(record);
+    setRemediationTransition({ status: allowed[0], reason: "", riskAcceptanceExpiresAt: riskDate, revalidationEvidenceId: "" });
+    setRemediationError("");
+    setModal("remediation-transition");
+  }
+
+  async function updateRemediationStatus() {
+    if (!selectedRemediation) return;
     try {
-      const response = await fetch(`/api/remediations/${encodeURIComponent(record.id)}`, {
+      const response = await fetch(`/api/remediations/${encodeURIComponent(selectedRemediation.id)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({
+          status: remediationTransition.status,
+          version: selectedRemediation.version,
+          reason: remediationTransition.reason.trim(),
+          riskAcceptanceExpiresAt: remediationTransition.status === "Risk accepted"
+            ? new Date(`${remediationTransition.riskAcceptanceExpiresAt}T23:59:59.000Z`).toISOString() : null,
+          revalidationEvidenceId: remediationTransition.status === "Closed"
+            ? remediationTransition.revalidationEvidenceId : null,
+        }),
       });
       const body = await response.json() as { error?: string };
       if (!response.ok) throw new Error(body.error || "Remediation status could not be updated.");
       await refreshControlPlane();
+      setModal(null);
       setToast("Remediation status updated and audited.");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Remediation status could not be updated.");
+      setRemediationError(error instanceof Error ? error.message : "Remediation status could not be updated.");
     }
   }
 
@@ -804,7 +847,7 @@ export default function CloudPenDashboard({
     return (
       <section className="panel resource-panel">
         <div className="resource-toolbar"><div><strong>Accountable exposure reduction</strong><span className="cell-subtext">Every change is appended to the workspace audit chain</span></div><button className="button primary" disabled={!canPlan} onClick={() => openRemediation()}>＋ New remediation</button></div>
-        {remediations.length === 0 ? <div className="empty-state"><div className="empty-glyph">✓</div><h3>No remediations are being tracked</h3><p>Create one from a path to assign ownership, due date, and revalidation state.</p></div> : <div className="record-grid">{remediations.map((record) => <article className="record-card" key={record.id}><div className="record-card-top"><div><span className="section-kicker">{record.pathId} · {record.id}</span><h3>{record.title}</h3></div><SeverityBadge severity={record.priority} /></div><p>{record.guidance}</p><dl><div><dt>Owner</dt><dd>{record.owner}</dd></div><div><dt>Due</dt><dd>{new Date(record.dueAt).toLocaleDateString()}</dd></div><div><dt>Status</dt><dd>{record.status}</dd></div></dl><label className="field compact"><span>Workflow status</span><select value={record.status} disabled={!canPlan} onChange={(event) => updateRemediationStatus(record, event.target.value as RemediationRecord["status"])}><option>Open</option><option>In progress</option><option>Risk accepted</option><option>Ready to revalidate</option><option>Closed</option></select></label></article>)}</div>}
+        {remediations.length === 0 ? <div className="empty-state"><div className="empty-glyph">✓</div><h3>No remediations are being tracked</h3><p>Create one from a path to assign ownership, due date, and revalidation state.</p></div> : <div className="record-grid">{remediations.map((record) => <article className="record-card" key={record.id}><div className="record-card-top"><div><span className="section-kicker">{record.pathId} · {record.id}</span><h3>{record.title}</h3></div><SeverityBadge severity={record.priority} /></div><p>{record.guidance}</p><dl><div><dt>Owner</dt><dd>{record.owner}</dd></div><div><dt>Due</dt><dd>{new Date(record.dueAt).toLocaleDateString()}</dd></div><div><dt>Status</dt><dd>{record.status}</dd></div><div><dt>Version</dt><dd>{record.version}</dd></div></dl>{record.riskAcceptanceExpiresAt && <p className="cell-subtext">Risk acceptance expires {new Date(record.riskAcceptanceExpiresAt).toLocaleDateString()}.</p>}<button className="button secondary full" disabled={!canRemediate || allowedRemediationTransitions(record).length === 0} onClick={() => openRemediationTransition(record)}>{record.status === "Closed" ? "Workflow complete" : "Change governed status"}</button></article>)}</div>}
       </section>
     );
   }
@@ -976,6 +1019,17 @@ export default function CloudPenDashboard({
             <label className="field"><span>Due date</span><input type="date" value={remediationForm.dueAt} onChange={(event) => setRemediationForm({ ...remediationForm, dueAt: event.target.value })} /></label>
             {remediationError && <p className="form-error" role="alert">{remediationError}</p>}
             <div className="modal-actions"><button className="button secondary" onClick={() => setModal(null)}>Close</button><button className="button primary" disabled={!canPlan || remediationForm.owner.trim().length < 2 || !remediationForm.dueAt} onClick={createRemediationDraft}>Create tracked remediation</button></div>
+          </>}
+          {modal === "remediation-transition" && selectedRemediation && <>
+            <span className="section-kicker">GOVERNED REMEDIATION</span><h2 id="modal-title">Change remediation status</h2>
+            <p className="modal-intro">The transition is version-checked and commits atomically with its audit event. Risk acceptance and closure require additional authority.</p>
+            <div className="receipt-grid"><div><span>Remediation</span><strong>{selectedRemediation.id}</strong></div><div><span>Current status</span><strong>{selectedRemediation.status}</strong></div><div><span>Path</span><strong>{selectedRemediation.pathId}</strong></div><div><span>Version</span><strong>{selectedRemediation.version}</strong></div></div>
+            <label className="field"><span>Next status</span><select value={remediationTransition.status} onChange={(event) => setRemediationTransition({ ...remediationTransition, status: event.target.value as RemediationRecord["status"] })}>{allowedRemediationTransitions(selectedRemediation).map((status) => <option key={status}>{status}</option>)}</select></label>
+            <label className="field"><span>Decision reason</span><textarea value={remediationTransition.reason} onChange={(event) => setRemediationTransition({ ...remediationTransition, reason: event.target.value })} placeholder="Explain the evidence and accountable decision behind this transition" rows={4} maxLength={500} /></label>
+            {remediationTransition.status === "Risk accepted" && <label className="field"><span>Risk acceptance expiry</span><input type="date" value={remediationTransition.riskAcceptanceExpiresAt} onChange={(event) => setRemediationTransition({ ...remediationTransition, riskAcceptanceExpiresAt: event.target.value })} /><small>Administrators may accept risk for no more than 365 days.</small></label>}
+            {remediationTransition.status === "Closed" && <label className="field"><span>Revalidation evidence</span><select value={remediationTransition.revalidationEvidenceId} onChange={(event) => setRemediationTransition({ ...remediationTransition, revalidationEvidenceId: event.target.value })}><option value="">Select a signed package</option>{evidencePackages.filter((item) => item.pathId === selectedRemediation.pathId).map((item) => <option key={item.id} value={item.id}>{item.id} · {new Date(item.createdAt).toLocaleString()}</option>)}</select><small>Only retained evidence for {selectedRemediation.pathId} can authorize closure.</small></label>}
+            {remediationError && <p className="form-error" role="alert">{remediationError}</p>}
+            <div className="modal-actions"><button className="button secondary" onClick={() => setModal(null)}>Cancel</button><button className="button primary" disabled={remediationTransition.reason.trim().length < 8 || (remediationTransition.status === "Risk accepted" && !remediationTransition.riskAcceptanceExpiresAt) || (remediationTransition.status === "Closed" && !remediationTransition.revalidationEvidenceId)} onClick={updateRemediationStatus}>Commit transition</button></div>
           </>}
           {modal === "run" && selectedRun && <>
             <span className="section-kicker">SIGNED VALIDATION PLAN</span><h2 id="modal-title">{selectedRun.name}</h2><div className="receipt-grid"><div><span>Status</span><strong>{selectedRun.status}</strong></div><div><span>Mode</span><strong>{selectedRun.mode}</strong></div><div><span>Requester</span><strong>{selectedRun.requestedBy}</strong></div><div><span>Expires</span><strong>{selectedRun.expiresAt ? new Date(selectedRun.expiresAt).toLocaleString() : "Unavailable"}</strong></div></div><div className="receipt-block"><span>AUTHORIZATION DIGEST</span><code>{selectedRun.authorizationDigest || "Unavailable"}</code><span>SIGNATURE · HMAC-SHA-256 · cloudpen-plan-v1</span><code>{selectedRun.signature || "Unavailable"}</code><p>Execution flag: <strong>false</strong>. Approval records intent but cannot make this plan executable.</p></div>

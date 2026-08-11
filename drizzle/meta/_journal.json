@@ -22,6 +22,13 @@
       "when": 1786420800000,
       "tag": "0002_seed_demo_workspace",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786507200000,
+      "tag": "0003_workflow_integrity",
+      "breakpoints": true
     }
   ]
 }

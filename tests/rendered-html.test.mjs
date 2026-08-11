@@ -38,6 +38,7 @@ before(async () => {
     "--port", String(port),
     "--persist-to", stateDirectory,
     "--var", "CLOUDPEN_ADMIN_EMAILS:admin@example.com",
+    "--var", "CLOUDPEN_OPERATOR_EMAILS:operator@example.com",
     "--var", "CLOUDPEN_VIEWER_EMAILS:viewer@example.com",
     "--var", "CLOUDPEN_REVIEWER_EMAILS:reviewer@example.com",
     "--var", "CLOUDPEN_PLAN_SIGNING_KEY:integration-test-signing-key-with-at-least-32-bytes",
@@ -268,6 +269,34 @@ test("enforces separation of duties for active-plan approval", async () => {
   assert.equal(approved.executable, false);
 });
 
+test("commits only one concurrent validation decision", async () => {
+  const create = await fetch(`${origin}/api/validation-runs`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ attackPathId: "CP-1037", mode: "Active canary", acknowledged: true }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201);
+
+  const reviewerHeaders = {
+    ...identityHeaders,
+    "oai-authenticated-user-email": "reviewer@example.com",
+    "content-type": "application/json",
+    origin,
+  };
+  const [approve, reject] = await Promise.all([
+    fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+      method: "PATCH", headers: reviewerHeaders,
+      body: JSON.stringify({ decision: "approve", reason: "Concurrent approval attempt" }),
+    }),
+    fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+      method: "PATCH", headers: reviewerHeaders,
+      body: JSON.stringify({ decision: "reject", reason: "Concurrent rejection attempt" }),
+    }),
+  ]);
+  assert.deepEqual([approve.status, reject.status].sort(), [200, 409]);
+});
+
 test("creates retained evidence manifests and tracked remediation", async () => {
   const evidence = await fetch(`${origin}/api/evidence/CP-1042`, {
     method: "POST",
@@ -292,14 +321,130 @@ test("creates retained evidence manifests and tracked remediation", async () => 
   const update = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
-    body: JSON.stringify({ status: "In progress" }),
+    body: JSON.stringify({ status: "In progress", version: 1, reason: "Implementation work has started" }),
   });
   assert.equal(update.status, 200);
+
+  const invalidTransition = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+    method: "PATCH",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Closed", version: 2, reason: "Attempted premature closure", revalidationEvidenceId: evidenceBody.packageId }),
+  });
+  assert.equal(invalidTransition.status, 409);
+
+  const ready = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+    method: "PATCH",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Ready to revalidate", version: 2, reason: "The permission boundary fix is deployed" }),
+  });
+  assert.equal(ready.status, 200);
+
+  const close = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+    method: "PATCH",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Closed", version: 3, reason: "Signed revalidation evidence confirms the path is fixed", revalidationEvidenceId: evidenceBody.packageId }),
+  });
+  assert.equal(close.status, 200);
 
   const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
   assert.equal(snapshot.auditChainValid, true);
   assert.ok(snapshot.evidence.some((item) => item.id === evidenceBody.packageId));
-  assert.ok(snapshot.remediations.some((item) => item.id === remediationBody.remediation.id && item.status === "In progress"));
+  assert.ok(snapshot.remediations.some((item) => item.id === remediationBody.remediation.id && item.status === "Closed" && item.version === 4));
+});
+
+test("reserves risk acceptance for administrators and rejects stale remediation versions", async () => {
+  const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
+  const operatorHeaders = { ...identityHeaders, "oai-authenticated-user-email": "operator@example.com" };
+  const create = await fetch(`${origin}/api/remediations`, {
+    method: "POST",
+    headers: { ...operatorHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ pathId: "CP-1037", owner: "Identity Security", dueAt }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201);
+  const expiry = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  const operatorAcceptance = await fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+    method: "PATCH",
+    headers: { ...operatorHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance pending vendor trust redesign", riskAcceptanceExpiresAt: expiry }),
+  });
+  assert.equal(operatorAcceptance.status, 403);
+
+  const [start, accept] = await Promise.all([
+    fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+      method: "PATCH",
+      headers: { ...identityHeaders, "content-type": "application/json", origin },
+      body: JSON.stringify({ status: "In progress", version: 1, reason: "Identity team began implementation" }),
+    }),
+    fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+      method: "PATCH",
+      headers: { ...identityHeaders, "content-type": "application/json", origin },
+      body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance pending vendor trust redesign", riskAcceptanceExpiresAt: expiry }),
+    }),
+  ]);
+  assert.deepEqual([start.status, accept.status].sort(), [200, 409]);
+});
+
+test("enforces remediation authority and evidence-gated reviewer closure", async () => {
+  const dueAt = new Date(Date.now() + 14 * 86_400_000).toISOString();
+  const operatorHeaders = { ...identityHeaders, "oai-authenticated-user-email": "operator@example.com" };
+  const reviewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "reviewer@example.com" };
+  const viewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "viewer@example.com" };
+
+  const riskCreate = await fetch(`${origin}/api/remediations`, {
+    method: "POST", headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ pathId: "CP-1031", owner: "Platform Security", dueAt }),
+  });
+  const riskRecord = await riskCreate.json();
+  assert.equal(riskCreate.status, 201);
+  const expiry = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  const viewerRisk = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+    method: "PATCH", headers: { ...viewerHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Viewer attempted unauthorized risk acceptance", riskAcceptanceExpiresAt: expiry }),
+  });
+  assert.equal(viewerRisk.status, 403);
+  const adminRisk = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+    method: "PATCH", headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance while the service control is redesigned", riskAcceptanceExpiresAt: expiry }),
+  });
+  assert.equal(adminRisk.status, 200);
+  const resume = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+    method: "PATCH", headers: { ...operatorHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "In progress", version: 2, reason: "Engineering resumed the remediation work" }),
+  });
+  assert.equal(resume.status, 200);
+
+  const closeCreate = await fetch(`${origin}/api/remediations`, {
+    method: "POST", headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ pathId: "CP-1024", owner: "Data Platform", dueAt }),
+  });
+  const closeRecord = await closeCreate.json();
+  assert.equal(closeCreate.status, 201);
+  for (const [status, version, reason] of [
+    ["In progress", 1, "The data platform team started the policy correction"],
+    ["Ready to revalidate", 2, "The corrected resource policy is deployed for validation"],
+  ]) {
+    const transition = await fetch(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
+      method: "PATCH", headers: { ...operatorHeaders, "content-type": "application/json", origin },
+      body: JSON.stringify({ status, version, reason }),
+    });
+    assert.equal(transition.status, 200);
+  }
+  const reviewerOrdinaryUpdate = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+    method: "PATCH", headers: { ...reviewerHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Ready to revalidate", version: 3, reason: "Reviewer attempted an operator transition" }),
+  });
+  assert.equal(reviewerOrdinaryUpdate.status, 403);
+  const evidence = await fetch(`${origin}/api/evidence/CP-1024`, {
+    method: "POST", headers: { ...reviewerHeaders, "content-type": "application/json", origin }, body: "{}",
+  });
+  const evidenceBody = await evidence.json();
+  assert.equal(evidence.status, 200);
+  const reviewerClose = await fetch(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
+    method: "PATCH", headers: { ...reviewerHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ status: "Closed", version: 3, reason: "Independent signed revalidation confirms the path is mitigated", revalidationEvidenceId: evidenceBody.packageId }),
+  });
+  assert.equal(reviewerClose.status, 200);
 });
 
 test("exports a signed guardrail policy that remains non-executable", async () => {

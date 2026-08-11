@@ -198,6 +198,13 @@ The export also creates a retained evidence-manifest row containing package ID, 
 | `POST /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state; requires same-origin JSON `{}` |
 | `POST /api/runners` | `enroll` (admin) | Pins a public-key fingerprint in `Pending` state with database-enforced `executable = 0` |
 
+Remediation transitions are server-governed: `Open` may move to `In progress` or `Risk accepted`; `In progress` may move to `Risk accepted` or `Ready to revalidate`; `Risk accepted` may return to `In progress`; and `Ready to revalidate` may return to `In progress` or close. `Closed` is terminal. Every request supplies the current integer `version` and an 8–500 character `reason`; concurrent stale transitions return `409`.
+
+- Operators and administrators may perform ordinary progress/revalidation transitions.
+- Only administrators may accept risk. The request must include `riskAcceptanceExpiresAt` no more than 365 days in the future; actor, reason, and expiry are retained.
+- Administrators and reviewers may close a remediation only from `Ready to revalidate` and only with a retained `revalidationEvidenceId` for the same attack path.
+- Viewers cannot transition remediation records.
+
 ### Approval rules
 
 - Only `Awaiting approval` plans may be approved or rejected.
@@ -205,6 +212,7 @@ The export also creates a retained evidence-manifest row containing package ID, 
 - The decision reason is required and audit logged.
 - Approved intent remains non-executable and expires with the original plan.
 - The requester or administrator may cancel an eligible plan.
+- Approval, rejection, and cancellation use compare-and-set status and expiry predicates; only one concurrent decision can commit.
 
 ## Errors
 

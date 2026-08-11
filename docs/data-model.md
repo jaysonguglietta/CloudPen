@@ -105,7 +105,7 @@ Stores server-issued plans and integrity data. Control-plane transitions include
 
 - `connectors` retains AWS account identity, External ID digest/hint, owner, status, and synchronization state without storing credentials or the raw External ID.
 - `evidence_packages` retains signed-manifest metadata while the exported evidence body remains ephemeral.
-- `remediations` tracks owner, due date, severity, guidance, and revalidation-oriented status.
+- `remediations` tracks owner, due date, severity, guidance, optimistic-concurrency version, transition reason, accountable risk acceptance/expiry, revalidation evidence, and a server-governed workflow. A partial unique index permits at most one non-closed remediation per workspace/path.
 - `discovery_jobs` stores read-only AWS metadata scope with a database check forcing `executable = 0`.
 - `runner_enrollments` pins a reviewed public-key fingerprint in `Pending` or `Disabled` state, also with database-enforced `executable = 0`.
 
@@ -124,6 +124,10 @@ Stores application-append-only events. Each event hashes its canonical content a
 ### `rate_limits`
 
 Stores per-identity counters and Unix expiry timestamps. Keys include the operation class and normalized email. Expired rows may be overwritten; scheduled garbage collection is not yet implemented.
+
+## Mutation and audit atomicity
+
+Security-relevant state changes and their hash-chained audit rows commit in one D1 batch. Conditional updates use compare-and-set predicates, and the audit insert is conditional on exactly one changed row. Audit-tip conflicts are retried with a newly derived chain link, so a failed audit write rolls back its paired mutation. Chain verification reads every row in bounded pages instead of treating histories over a fixed row count as invalid.
 
 ## Data classification
 
