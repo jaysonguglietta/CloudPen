@@ -16,7 +16,6 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Durable connectors, approval decisions, evidence manifests, remediation workflows, signed reports, and pending runner enrollment records.
 - D1-owned exposure snapshots, cloud accounts, assets, attack paths, and graph edges with explicit demo provenance.
 - Shareable view URLs, authoritative empty states, a real help surface, audit-chain verification, and signed guardrail export.
-- Private control-mapped screenshot capture, visible compliance banners, normalized filenames/folders, D1/R2 evidence storage, and framework/control search.
 
 ### Changed
 
@@ -27,7 +26,6 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Placeholder remediation, approval, help, report, connector, and policy-export actions now invoke durable server workflows.
 - Evidence export is server-owned, redacted, signed, non-cacheable, and audit logged.
 - Dependencies were upgraded and the vulnerable legacy Drizzle generation toolchain was removed.
-- HIPAA, PCI DSS, FedRAMP, SOC 2, ISO 27001, and NIST CSF selectors are now always visible on the Evidence Capture page; HIPAA controls load by default and every framework selection immediately refreshes the control list.
 
 ### Removed
 
@@ -38,7 +36,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 ### Security
 
-- Production dependency vulnerabilities reduced to zero at validation; two upstream-unpatched, build-only `image-size` advisories are documented and excluded from the Worker artifact.
+- Known dependency vulnerabilities reduced to zero at the time of validation.
 - Host-header-derived social metadata removed.
 - Local listener restricted from `0.0.0.0` to `127.0.0.1`.
 - Core approval, canary-only, evidence-redaction, and cleanup guardrails made non-disableable.

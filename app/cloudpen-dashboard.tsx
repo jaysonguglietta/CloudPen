@@ -193,7 +193,7 @@ export default function CloudPenDashboard({
   const [runners, setRunners] = useState<RunnerRecord[]>([]);
   const [screenshots, setScreenshots] = useState<ScreenshotEvidenceRecord[]>([]);
   const [screenshotsLoading, setScreenshotsLoading] = useState(true);
-  const [screenshotFilters, setScreenshotFilters] = useState<{ frameworkId: string; controlId: string; query: string }>({ frameworkId: complianceFrameworks[0].id, controlId: "", query: "" });
+  const [screenshotFilters, setScreenshotFilters] = useState({ frameworkId: "", controlId: "", query: "" });
   const [captureForm, setCaptureForm] = useState({
     frameworkId: complianceFrameworks[0].id,
     controlId: complianceFrameworks[0].controls[0].id,
@@ -269,7 +269,7 @@ export default function CloudPenDashboard({
   }, []);
 
   useEffect(() => {
-    void searchScreenshots({ frameworkId: complianceFrameworks[0].id, controlId: "", query: "" });
+    void searchScreenshots({ frameworkId: "", controlId: "", query: "" });
   }, []);
 
   useEffect(() => {
@@ -995,20 +995,17 @@ export default function CloudPenDashboard({
       <section className="screenshot-layout">
         <article className="panel capture-hero">
           <div><span className="section-kicker">CONTROL-MAPPED CAPTURE</span><h2>Turn a screen state into audit-ready evidence</h2><p>Choose the framework and control before capture. CloudPen adds a visible banner, creates a normalized filename, and stores the PNG privately under the matching framework and control folder.</p></div>
-          <div className="capture-inline-selectors">
-            <label className="field compact"><span>1. Choose compliance area</span><select value={captureForm.frameworkId} onChange={(event) => { const framework = frameworkById(event.target.value) ?? complianceFrameworks[0]; setCaptureForm({ ...captureForm, frameworkId: framework.id, controlId: framework.controls[0].id }); }}>{complianceFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.shortLabel} · {framework.version}</option>)}</select></label>
-            <label className="field compact"><span>2. Choose control number</span><select value={captureForm.controlId} onChange={(event) => setCaptureForm({ ...captureForm, controlId: event.target.value })}>{selectedCaptureFramework.controls.map((control) => <option value={control.id} key={control.id}>{control.id} · {control.title}</option>)}</select><small>{selectedCaptureFramework.controls.length} {selectedCaptureFramework.shortLabel} controls available</small></label>
-          </div>
-          <button className="button primary" disabled={!canCapture} title={!canCapture ? "Reviewer, operator, or administrator role required" : undefined} onClick={openCapture}>Continue to capture settings →</button>
+          <div className="capture-example"><span>FOLDER PATTERN</span><code>hipaa/164.312-a-1/2026/08/</code><span>FILE PATTERN</span><code>HIPAA_164.312-a-1_20260811T143000Z_access-review.png</code></div>
+          <button className="button primary" disabled={!canCapture} title={!canCapture ? "Reviewer, operator, or administrator role required" : undefined} onClick={openCapture}>▣ Capture screenshot</button>
         </article>
 
         <article className="panel screenshot-library">
           <div className="panel-header"><div><span className="section-kicker">PRIVATE EVIDENCE LIBRARY</span><h2>Find screenshots by control</h2></div><span className="result-count">{screenshotsLoading ? "Searching…" : `${screenshots.length} result${screenshots.length === 1 ? "" : "s"}`}</span></div>
           <form className="screenshot-search" onSubmit={(event) => { event.preventDefault(); void searchScreenshots(); }}>
-            <label className="field compact"><span>Compliance area</span><select value={screenshotFilters.frameworkId} onChange={(event) => setScreenshotFilters({ frameworkId: event.target.value, controlId: "", query: screenshotFilters.query })}><option value="">All frameworks</option>{complianceFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.label} · {framework.version}</option>)}</select><small>Select HIPAA, PCI DSS, or another framework to populate its controls.</small></label>
+            <label className="field compact"><span>Compliance area</span><select value={screenshotFilters.frameworkId} onChange={(event) => setScreenshotFilters({ frameworkId: event.target.value, controlId: "", query: screenshotFilters.query })}><option value="">All frameworks</option>{complianceFrameworks.map((framework) => <option value={framework.id} key={framework.id}>{framework.label} · {framework.version}</option>)}</select></label>
             <label className="field compact"><span>Control number</span><select value={screenshotFilters.controlId} disabled={!selectedFilterFramework} onChange={(event) => setScreenshotFilters({ ...screenshotFilters, controlId: event.target.value })}><option value="">All controls</option>{selectedFilterFramework?.controls.map((control) => <option value={control.id} key={control.id}>{control.id} · {control.title}</option>)}</select></label>
             <label className="field compact search-wide"><span>Filename, title, or notes</span><input type="search" maxLength={100} value={screenshotFilters.query} onChange={(event) => setScreenshotFilters({ ...screenshotFilters, query: event.target.value })} placeholder="Search evidence…" /></label>
-            <div className="search-actions"><button className="button secondary" type="button" onClick={() => { const cleared = { frameworkId: "", controlId: "", query: "" }; setScreenshotFilters(cleared); void searchScreenshots(cleared); }}>Show all</button><button className="button primary" type="submit">Search</button></div>
+            <div className="search-actions"><button className="button secondary" type="button" onClick={() => { const cleared = { frameworkId: "", controlId: "", query: "" }; setScreenshotFilters(cleared); void searchScreenshots(cleared); }}>Clear</button><button className="button primary" type="submit">Search</button></div>
           </form>
 
           {screenshotsLoading ? <div className="empty-state"><h3>Searching private evidence…</h3><p>Control metadata is queried without exposing object-store paths.</p></div> : screenshots.length === 0 ? <div className="empty-state"><div className="empty-glyph">▣</div><h3>No screenshots match this control</h3><p>Clear the filters or capture the first piece of evidence for this control.</p><button className="button primary" disabled={!canCapture} onClick={openCapture}>Capture evidence</button></div> : <div className="screenshot-grid">{screenshots.map((record) => <article className="screenshot-card" key={record.id}>
