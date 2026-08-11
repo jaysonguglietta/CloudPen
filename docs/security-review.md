@@ -21,7 +21,7 @@ The system is not production-ready for real tenants or penetration testing. Its 
 - Validation plan scope, guardrails, signature, expiry, and status
 - Evidence observations and integrity metadata
 - Audit attribution and hash-chain continuity
-- AWS account identifiers and External ID digests in connector events
+- AWS account identifiers and non-secret connector lifecycle events; External IDs and their derivatives are not retained
 - D1 data and the plan-signing secret
 - Source, lockfile, CI workflow, migration, and deployment configuration
 
@@ -42,7 +42,7 @@ The system is not production-ready for real tenants or penetration testing. Its 
 
 - HTTP methods, paths, query strings, headers, Origin, content type, content length, and bodies
 - Browser state, JavaScript execution, timing, retries, concurrency, and UI manipulation
-- Path IDs, validation mode, acknowledgement, connector name/account/External ID, and guardrail property
+- Path IDs, validation mode, acknowledgement, connector name/account/one-time External ID, and guardrail property
 - Dependency and source contributions
 - Local processes able to reach loopback
 

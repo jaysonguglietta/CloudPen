@@ -93,6 +93,13 @@ function initials(value: string): string {
   return value.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "CP";
 }
 
+function generateExternalId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `cpv1_${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
+}
+
 function SeverityBadge({ severity }: { severity: Severity }) {
   return <span className={`badge severity-${severity.toLowerCase()}`}>{severity}</span>;
 }
@@ -174,7 +181,7 @@ export default function CloudPenDashboard({
   const [auditChainValid, setAuditChainValid] = useState(true);
   const [dataMode, setDataMode] = useState<"demo" | "live">("demo");
   const [loadingControlPlane, setLoadingControlPlane] = useState(true);
-  const [modal, setModal] = useState<"validate" | "connect" | "remediate" | "remediation-transition" | "run" | null>(null);
+  const [modal, setModal] = useState<"validate" | "connect" | "rotate-connector" | "remediate" | "remediation-transition" | "run" | null>(null);
   const [selectedRun, setSelectedRun] = useState<ValidationRun | null>(null);
   const [decisionReason, setDecisionReason] = useState("");
   const [validationMode, setValidationMode] = useState<"Read-only" | "Active canary">("Read-only");
@@ -186,6 +193,8 @@ export default function CloudPenDashboard({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [accountForm, setAccountForm] = useState({ name: "", id: "", externalId: "" });
   const [accountError, setAccountError] = useState("");
+  const [selectedConnector, setSelectedConnector] = useState<ConnectorRecord | null>(null);
+  const [externalIdCopied, setExternalIdCopied] = useState(false);
   const [remediationForm, setRemediationForm] = useState({ owner: "", dueAt: "" });
   const [remediationError, setRemediationError] = useState("");
   const [selectedRemediation, setSelectedRemediation] = useState<RemediationRecord | null>(null);
@@ -334,6 +343,38 @@ export default function CloudPenDashboard({
     setModal("validate");
   }
 
+  function openConnector() {
+    setAccountForm({ name: "", id: "", externalId: generateExternalId() });
+    setAccountError("");
+    setModal("connect");
+  }
+
+  function openConnectorRotation(connector: ConnectorRecord) {
+    setSelectedConnector(connector);
+    setAccountForm({ name: connector.name, id: connector.accountId, externalId: generateExternalId() });
+    setExternalIdCopied(false);
+    setAccountError("");
+    setModal("rotate-connector");
+  }
+
+  async function rotateConnectorExternalId() {
+    if (!selectedConnector || !externalIdCopied) return;
+    try {
+      const response = await fetch(`/api/connectors/${encodeURIComponent(selectedConnector.id)}/external-id`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ externalId: accountForm.externalId }),
+      });
+      const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "External ID rotation could not be recorded.");
+      await refreshControlPlane();
+      setModal(null);
+      setToast("Rotation recorded. Apply the copied External ID in the customer-controlled AWS trust before verification.");
+    } catch (error) {
+      setAccountError(error instanceof Error ? error.message : "External ID rotation could not be recorded.");
+    }
+  }
+
   async function startValidation() {
     if (validationMode === "Active canary" && !acknowledged) return;
     try {
@@ -366,8 +407,8 @@ export default function CloudPenDashboard({
       setAccountError("AWS account ID must contain exactly 12 digits.");
       return;
     }
-    if (accountForm.externalId.trim().length < 8) {
-      setAccountError("External ID must be at least 8 characters.");
+    if (!/^cpv1_[A-Za-z0-9_-]{43}$/.test(accountForm.externalId)) {
+      setAccountError("Generate a new 256-bit External ID before continuing.");
       return;
     }
     try {
@@ -386,7 +427,7 @@ export default function CloudPenDashboard({
       setAccountError("");
       setModal(null);
       setView("connectors");
-      setToast("Connector request recorded. No AWS trust or credentials were created; runner provisioning is still required.");
+      setToast("Connector request recorded. The External ID was not retained; keep your copied value in the customer-controlled trust configuration.");
       setAccountForm({ name: "", id: "", externalId: "" });
     } catch (error) {
       setAccountError(error instanceof Error ? error.message : "The connector request could not be saved.");
@@ -835,9 +876,9 @@ export default function CloudPenDashboard({
   function renderConnectors() {
     return (
       <section className="panel resource-panel">
-        <div className="resource-toolbar"><div><strong>Customer-controlled AWS roles</strong><span className="cell-subtext">No static access keys are stored</span></div><button className="button primary" disabled={!canConnect} onClick={() => setModal("connect")}>＋ Connect AWS account</button></div>
-        {connectors.length === 0 ? <div className="empty-state"><div className="empty-glyph">⛓</div><h3>No durable connectors yet</h3><p>Create a credential-free connector request. Discovery remains disabled until a customer-hosted runner is enrolled.</p><button className="button primary" disabled={!canConnect} onClick={() => setModal("connect")}>Connect account</button></div> : (
-          <div className="record-grid">{connectors.map((connector) => <article className="record-card" key={connector.id}><div className="record-card-top"><div><span className="section-kicker">{connector.provider} · {connector.id}</span><h3>{connector.name}</h3></div><StatusBadge status={connector.status} /></div><dl><div><dt>Account</dt><dd>{connector.accountId}</dd></div><div><dt>External ID</dt><dd>{connector.externalIdHint}</dd></div><div><dt>Created by</dt><dd>{connector.createdBy}</dd></div><div><dt>Last sync</dt><dd>{connector.lastSyncAt || "Never"}</dd></div></dl><button className="button secondary full" disabled={!canConnect || connector.status === "Disabled"} onClick={() => planDiscovery(connector)}>Plan read-only discovery</button></article>)}</div>
+        <div className="resource-toolbar"><div><strong>Customer-controlled AWS roles</strong><span className="cell-subtext">No static access keys or External IDs are retained</span></div><button className="button primary" disabled={!canConnect} onClick={openConnector}>＋ Connect AWS account</button></div>
+        {connectors.length === 0 ? <div className="empty-state"><div className="empty-glyph">⛓</div><h3>No durable connectors yet</h3><p>Create a credential-free connector request. Discovery remains disabled until a customer-hosted runner is enrolled.</p><button className="button primary" disabled={!canConnect} onClick={openConnector}>Connect account</button></div> : (
+          <div className="record-grid">{connectors.map((connector) => <article className="record-card" key={connector.id}><div className="record-card-top"><div><span className="section-kicker">{connector.provider} · {connector.id}</span><h3>{connector.name}</h3></div><StatusBadge status={connector.status} /></div><dl><div><dt>Account</dt><dd>{connector.accountId}</dd></div><div><dt>External ID</dt><dd>{connector.externalIdStatus === "not-retained" ? "Not retained" : "Unavailable"}</dd></div><div><dt>Created by</dt><dd>{connector.createdBy}</dd></div><div><dt>Last sync</dt><dd>{connector.lastSyncAt || "Never"}</dd></div></dl><button className="button secondary full" disabled={!canConnect || connector.status === "Disabled"} onClick={() => openConnectorRotation(connector)}>Rotate External ID</button><button className="button secondary full" disabled={!canConnect || connector.status === "Disabled"} onClick={() => planDiscovery(connector)}>Plan read-only discovery</button></article>)}</div>
         )}
       </section>
     );
@@ -961,7 +1002,7 @@ export default function CloudPenDashboard({
           <div className={`data-mode-banner ${dataMode}`} role="status"><strong>{dataMode === "demo" ? "Demo data" : "Live workspace"}</strong><span>{dataMode === "demo" ? "Attack paths and inventory are seeded examples. Durable plans, approvals, evidence, connectors, remediation, and audit events are real local records." : "Metrics and findings are derived from the current workspace inventory."}</span></div>
           <div className="page-heading">
             <div><span className="page-eyebrow">{title.eyebrow}</span><h1>{title.title}</h1><p>{title.description}</p></div>
-            <div className="heading-actions"><button className="button secondary" disabled={!canConnect} title={!canConnect ? "Operator or administrator role required" : undefined} onClick={() => setModal("connect")}>＋ Connect account</button><button className="button primary" disabled={!canPlan} title={!canPlan ? "Operator or administrator role required" : undefined} onClick={() => openValidation()}>▶ New validation</button></div>
+            <div className="heading-actions"><button className="button secondary" disabled={!canConnect} title={!canConnect ? "Operator or administrator role required" : undefined} onClick={openConnector}>＋ Connect account</button><button className="button primary" disabled={!canPlan} title={!canPlan ? "Operator or administrator role required" : undefined} onClick={() => openValidation()}>▶ New validation</button></div>
           </div>
           {view === "overview" && renderOverview()}
           {view === "paths" && renderPaths()}
@@ -995,11 +1036,20 @@ export default function CloudPenDashboard({
             <span className="section-kicker">AWS CONNECTOR</span><h2 id="modal-title">Connect a cloud account</h2><p className="modal-intro">CloudPen uses a customer-controlled role with a unique External ID. No static access keys are stored.</p>
             <label className="field"><span>Account name</span><input value={accountForm.name} onChange={(event) => setAccountForm({ ...accountForm, name: event.target.value })} placeholder="e.g. Payments Production" autoFocus /></label>
             <label className="field"><span>AWS account ID</span><input value={accountForm.id} onChange={(event) => setAccountForm({ ...accountForm, id: event.target.value })} placeholder="123456789012" inputMode="numeric" /></label>
-            <label className="field"><span>External ID</span><input value={accountForm.externalId} onChange={(event) => setAccountForm({ ...accountForm, externalId: event.target.value })} placeholder="northstar-cloudpen-prod" /><small>Use a unique value that is not shared with another vendor.</small></label>
+            <label className="field"><span>One-time External ID</span><input value={accountForm.externalId} readOnly aria-describedby="external-id-guidance" /><small id="external-id-guidance">Generated from 256 bits of browser entropy. Copy it now; CloudPen validates it but never retains the value or a reusable digest.</small></label>
+            <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setAccountForm({ ...accountForm, externalId: generateExternalId() })}>Regenerate</button><button type="button" className="button secondary" onClick={async () => { await navigator.clipboard.writeText(accountForm.externalId); setToast("External ID copied. Store it in the customer-controlled AWS trust configuration."); }}>Copy External ID</button></div>
             {accountError && <p className="form-error" role="alert">{accountError}</p>}
-            <div className="connection-note"><span>i</span><p>This records a durable connector and External ID digest. A non-executable discovery plan can be created next; no AWS trust is changed by CloudPen.</p></div>
+            <div className="connection-note"><span>i</span><p>This records a durable connector but discards the External ID without hashing it. A non-executable discovery plan can be created next; no AWS trust is changed by CloudPen.</p></div>
             <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setModal(null)}>Cancel</button><button className="button primary" type="submit">Create connector record</button></div>
           </form>}
+          {modal === "rotate-connector" && selectedConnector && <>
+            <span className="section-kicker">EXTERNAL ID ROTATION</span><h2 id="modal-title">Rotate {selectedConnector.name}</h2><p className="modal-intro">Copy the new one-time value into the customer-controlled AWS trust policy. CloudPen validates the format, records the rotation event, and discards the value.</p>
+            <label className="field"><span>New one-time External ID</span><input value={accountForm.externalId} readOnly /><small>Generated from 256 bits of browser entropy. Regenerating invalidates the previous value shown in this dialog.</small></label>
+            <div className="modal-actions"><button type="button" className="button secondary" onClick={() => { setAccountForm({ ...accountForm, externalId: generateExternalId() }); setExternalIdCopied(false); }}>Regenerate</button><button type="button" className="button secondary" onClick={async () => { await navigator.clipboard.writeText(accountForm.externalId); setExternalIdCopied(true); setToast("New External ID copied."); }}>Copy new value</button></div>
+            {accountError && <p className="form-error" role="alert">{accountError}</p>}
+            <div className="connection-note"><span>i</span><p>Recording rotation returns the connector to Runner required. No current or historical External ID is recoverable from CloudPen.</p></div>
+            <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setModal(null)}>Cancel</button><button className="button primary" disabled={!externalIdCopied} onClick={rotateConnectorExternalId}>Record rotation</button></div>
+          </>}
           {modal === "remediate" && <>
             <span className="section-kicker">ROOT-CAUSE REMEDIATION</span><h2 id="modal-title">Restrict the risky permission</h2><p className="modal-intro">This recommendation closes the shortest validated route while preserving the approved deployment workflow.</p>
             <div className="remediation-block"><span>WHY THIS FIX</span><p>{selectedPath.remediation}</p></div>

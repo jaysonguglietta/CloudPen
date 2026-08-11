@@ -149,7 +149,7 @@ Records a connector-provisioning request. It does not contact AWS, issue CloudFo
 {
   "name": "Payments Production",
   "accountId": "123456789012",
-  "externalId": "customer-unique-context"
+  "externalId": "cpv1_<43-character-base64url-value>"
 }
 ```
 
@@ -157,9 +157,9 @@ Validation:
 
 - name: 2–80 trimmed characters;
 - account ID: exactly 12 digits;
-- External ID: 8–128 characters from the explicit safe character set.
+- External ID: `cpv1_` followed by the 43-character unpadded base64url encoding of 256 random bits generated in the browser. Repeated/known-pattern values are rejected.
 
-Only a SHA-256 digest and four-character hint of the External ID are persisted. The raw value is not retained or returned.
+The External ID is validated and discarded. No raw value, hint, plain digest, or keyed verifier is retained or returned. The user must copy it into the customer-controlled AWS trust configuration before leaving the dialog.
 
 Response:
 
@@ -194,6 +194,7 @@ The export also creates a retained evidence-manifest row containing package ID, 
 | `POST /api/remediations` | `plan` | Creates an owned, due-dated remediation linked to a known path |
 | `PATCH /api/remediations/{id}` | `plan` | Moves remediation through the supported workflow states |
 | `POST /api/connectors/{id}/discovery` | `connect` | Records a bounded AWS metadata-read-only discovery plan with `executable: false` |
+| `POST /api/connectors/{id}/external-id` | `connect` | Validates a newly generated one-time External ID, records rotation, returns the connector to `Runner required`, and retains no value or digest |
 | `GET /api/guardrails/export` | `read` | Downloads a signed, non-executable policy envelope |
 | `POST /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state; requires same-origin JSON `{}` |
 | `POST /api/runners` | `enroll` (admin) | Pins a public-key fingerprint in `Pending` state with database-enforced `executable = 0` |

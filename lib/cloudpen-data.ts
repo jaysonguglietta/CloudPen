@@ -90,7 +90,7 @@ export type ConnectorRecord = {
   accountId: string;
   provider: "AWS";
   status: "Draft" | "Awaiting verification" | "Verified" | "Runner required" | "Disabled" | "Error";
-  externalIdHint: string;
+  externalIdStatus: "not-retained";
   createdBy: string;
   createdAt: string;
   lastSyncAt: string | null;
