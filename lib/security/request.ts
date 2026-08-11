@@ -1,3 +1,5 @@
+import { BoundedBodyReadError, readBoundedUtf8Stream } from "./bounded-body.mjs";
+
 const MAX_JSON_BYTES = 8_192;
 
 export class RequestSecurityError extends Error {
@@ -12,9 +14,18 @@ export function enforceMutationRequest(request: Request): void {
     throw new RequestSecurityError(415, "Requests must use application/json.");
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) {
-    throw new RequestSecurityError(413, "Request body is too large.");
+  const rawContentLength = request.headers.get("content-length");
+  if (rawContentLength !== null) {
+    if (!/^\d+$/.test(rawContentLength)) {
+      throw new RequestSecurityError(400, "Content-Length must be a non-negative integer.");
+    }
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength)) {
+      throw new RequestSecurityError(400, "Content-Length is invalid.");
+    }
+    if (contentLength > MAX_JSON_BYTES) {
+      throw new RequestSecurityError(413, "Request body is too large.");
+    }
   }
 
   const origin = request.headers.get("origin");
@@ -29,9 +40,17 @@ export function enforceMutationRequest(request: Request): void {
 }
 
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES) {
-    throw new RequestSecurityError(413, "Request body is too large.");
+  let text: string;
+  try {
+    text = await readBoundedUtf8Stream(request.body, MAX_JSON_BYTES);
+  } catch (error) {
+    if (error instanceof BoundedBodyReadError) {
+      if (error.code === "body_size") {
+        throw new RequestSecurityError(413, error.message);
+      }
+      throw new RequestSecurityError(400, error.message);
+    }
+    throw error;
   }
   let value: unknown;
   try {

@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { getChatGPTUser, type ChatGPTUser } from "../../app/chatgpt-auth";
+import { LOCAL_IDENTITY_VERIFIED_HEADER } from "./headers";
 import { roleForEmail, runtimeBindings, type CloudPenRole } from "./runtime";
 
 export type AuthorizedUser = ChatGPTUser & {
@@ -21,11 +22,10 @@ export async function getAuthorizedUser(): Promise<AuthorizedUser | null> {
     return role ? { ...identity, role, localDevelopment: false } : null;
   }
 
-  const localMode = process.env.NODE_ENV === "development" || runtimeBindings().CLOUDPEN_LOCAL_MODE === "1";
+  const localMode = runtimeBindings().CLOUDPEN_LOCAL_MODE === "1";
   if (!localMode) return null;
   const requestHeaders = await headers();
-  const hostname = (requestHeaders.get("host") ?? "").split(":", 1)[0];
-  if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "[::1]") return null;
+  if (requestHeaders.get(LOCAL_IDENTITY_VERIFIED_HEADER) !== "1") return null;
 
   const email = runtimeBindings().CLOUDPEN_LOCAL_DEV_EMAIL?.trim() || "local-admin@cloudpen.invalid";
   return {

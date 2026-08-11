@@ -59,7 +59,7 @@ For UI development with hot reload:
 npm run dev
 ```
 
-Copy `.env.example` to an ignored local environment file if you need to customize the development identity. Never reuse the development signing key or local mode in production.
+Copy `.env.example` to an ignored local environment file if you need to customize the development identity. The launcher enables local mode only on loopback and creates an ephemeral signing key when none is configured. Never use local mode in production.
 
 ## Production environment
 

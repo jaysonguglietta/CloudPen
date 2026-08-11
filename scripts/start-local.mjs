@@ -1,19 +1,16 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 const wrangler = resolve("node_modules/wrangler/bin/wrangler.js");
 const config = resolve("dist/server/wrangler.json");
 const persistence = resolve(".wrangler/state");
 
-const child = spawn(process.execPath, [
+const migration = spawnSync(process.execPath, [
   wrangler,
-  "dev",
+  "d1", "migrations", "apply", "site-creator-d1",
+  "--local",
   "--config", config,
-  "--ip", "127.0.0.1",
-  "--port", "8787",
   "--persist-to", persistence,
-  "--var", "CLOUDPEN_LOCAL_MODE:1",
-  "--var", "PUBLIC_APP_ORIGIN:http://127.0.0.1:8787",
 ], {
   env: {
     ...process.env,
@@ -22,11 +19,33 @@ const child = spawn(process.execPath, [
   stdio: "inherit",
 });
 
-for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => child.kill(signal));
-}
+if (migration.status !== 0) {
+  process.exitCode = migration.status ?? 1;
+} else {
 
-child.on("exit", (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  else process.exitCode = code ?? 1;
-});
+  const child = spawn(process.execPath, [
+  wrangler,
+  "dev",
+  "--config", config,
+  "--ip", "127.0.0.1",
+  "--port", "8787",
+  "--persist-to", persistence,
+  "--var", "CLOUDPEN_LOCAL_MODE:1",
+  "--var", "PUBLIC_APP_ORIGIN:http://127.0.0.1:8787",
+  ], {
+  env: {
+    ...process.env,
+    WRANGLER_LOG_PATH: resolve(".wrangler/wrangler.log"),
+  },
+  stdio: "inherit",
+  });
+
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => child.kill(signal));
+  }
+
+  child.on("exit", (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exitCode = code ?? 1;
+  });
+}

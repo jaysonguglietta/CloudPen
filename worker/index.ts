@@ -1,7 +1,8 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { installRuntimeBindings, type RuntimeBindings } from "../lib/security/runtime";
+import { AUTHENTICATED_USER_EMAIL_HEADER, LOCAL_IDENTITY_VERIFIED_HEADER } from "../lib/security/headers";
+import { configuredOrigin, installRuntimeBindings, type RuntimeBindings } from "../lib/security/runtime";
 
 interface Env extends RuntimeBindings {
   ASSETS: Fetcher;
@@ -29,23 +30,48 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     installRuntimeBindings(env);
-    const url = new URL(request.url);
+    const prepared = prepareTrustedRequest(request, env);
+    if (prepared instanceof Response) return hardenResponse(request, prepared);
+    const url = new URL(prepared.url);
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
-      const response = await handleImageOptimization(request, {
-        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+      const response = await handleImageOptimization(prepared, {
+        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, prepared.url))),
         transformImage: async (body, { width, format, quality }) => {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
       }, allowedWidths);
-      return hardenResponse(request, response);
+      return hardenResponse(prepared, response);
     }
 
-    return hardenResponse(request, await handler.fetch(request, env, ctx));
+    return hardenResponse(prepared, await handler.fetch(prepared, env, ctx));
   },
 };
+
+function prepareTrustedRequest(request: Request, env: Env): Request | Response {
+  const url = new URL(request.url);
+  const headers = new Headers(request.headers);
+  headers.delete(LOCAL_IDENTITY_VERIFIED_HEADER);
+
+  if (headers.has(AUTHENTICATED_USER_EMAIL_HEADER) && url.origin !== configuredOrigin()) {
+    return new Response("Identity is not trusted on this origin.", { status: 403 });
+  }
+
+  if (env.CLOUDPEN_LOCAL_MODE === "1") {
+    if (!isLoopbackHostname(url.hostname)) {
+      return new Response("Local mode is restricted to the loopback interface.", { status: 403 });
+    }
+    headers.set(LOCAL_IDENTITY_VERIFIED_HEADER, "1");
+  }
+
+  return new Request(request, { headers });
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]" || hostname === "::1";
+}
 
 function hardenResponse(request: Request, response: Response): Response {
   const headers = new Headers(response.headers);

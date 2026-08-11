@@ -1,8 +1,5 @@
 import "server-only";
 import {
-  accounts as demoAccounts,
-  assets as demoAssets,
-  attackPaths as demoAttackPaths,
   type AuditRecord,
   type ConnectorRecord,
   type ControlPlaneSnapshot,
@@ -30,7 +27,6 @@ export type GuardrailPolicy = {
 
 export async function listValidationRuns(user: AuthorizedUser): Promise<ValidationRun[]> {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `read:${user.email.toLowerCase()}`, 120, 60);
   await expireStalePlans(db);
   const result = await db
@@ -64,7 +60,6 @@ export async function createValidationPlan(
   input: { attackPathId: string; mode: "Read-only" | "Active canary"; acknowledged: boolean },
 ): Promise<{ run: ValidationRun; receipt: { algorithm: string; keyId: string; authorizationDigest: string; signature: string; executable: false } }> {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `plan:${user.email.toLowerCase()}`, 10, 60);
 
   const path = await findAttackPath(db, input.attackPathId);
@@ -140,7 +135,7 @@ export async function createValidationPlan(
 
 export async function getGuardrailPolicy(user: AuthorizedUser): Promise<GuardrailPolicy> {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `policy-read:${user.email.toLowerCase()}`, 120, 60);
   const row = await db.prepare(`SELECT require_approval, canary_only, redact_evidence, cleanup_required,
       max_concurrency, max_session_minutes FROM guardrail_policies WHERE workspace_id = ?`)
     .bind(WORKSPACE_ID)
@@ -161,7 +156,6 @@ export async function updateGuardrailPolicy(
   patch: Partial<Pick<GuardrailPolicy, "requireApproval" | "canaryOnly" | "redactEvidence" | "cleanupRequired">>,
 ): Promise<GuardrailPolicy> {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `configure:${user.email.toLowerCase()}`, 20, 60);
   const current = await getGuardrailPolicy(user);
   const next = { ...current, ...patch };
@@ -179,7 +173,6 @@ export async function updateGuardrailPolicy(
 
 export async function createEvidencePackage(user: AuthorizedUser, attackPathId: string) {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `evidence:${user.email.toLowerCase()}`, 20, 60);
   const path = await findAttackPath(db, attackPathId);
   if (!path) throw new ValidationError("Unknown attack path.");
@@ -218,7 +211,6 @@ export async function recordConnectorRequest(
   input: { name: string; accountId: string; externalId: string },
 ) {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `connect:${user.email.toLowerCase()}`, 5, 300);
   const existing = await db.prepare("SELECT id FROM connectors WHERE workspace_id = ? AND account_id = ?")
     .bind(WORKSPACE_ID, input.accountId).first<{ id: string }>();
@@ -242,7 +234,7 @@ export async function recordConnectorRequest(
 
 export async function getExposureCatalog(user: AuthorizedUser): Promise<ExposureCatalog> {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `catalog-read:${user.email.toLowerCase()}`, 120, 60);
   const snapshot = await db.prepare(`SELECT id, source, status, collected_at FROM exposure_snapshots
     WHERE workspace_id = ? ORDER BY collected_at DESC LIMIT 1`).bind(WORKSPACE_ID)
     .first<{ id: string; source: ExposureCatalog["snapshot"]["source"]; status: ExposureCatalog["snapshot"]["status"]; collected_at: string }>();
@@ -265,8 +257,10 @@ export async function getExposureCatalog(user: AuthorizedUser): Promise<Exposure
 
 export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<ControlPlaneSnapshot> {
   const db = database();
-  await initializeControlPlane(db, user);
-  const [runs, connectorRows, evidenceRows, remediationRows, auditRows, runnerRows] = await Promise.all([
+  await enforceRateLimit(db, `snapshot-read:${user.email.toLowerCase()}`, 60, 60);
+  const [workspace, runs, connectorRows, evidenceRows, remediationRows, auditRows, runnerRows] = await Promise.all([
+    db.prepare("SELECT name, data_mode FROM workspaces WHERE id = ?")
+      .bind(WORKSPACE_ID).first<{ name: string; data_mode: "demo" | "live" }>(),
     listValidationRuns(user),
     db.prepare(`SELECT id, name, account_id, provider, status, external_id_hint, created_by,
       created_at, last_sync_at, error_message FROM connectors WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 100`)
@@ -310,8 +304,9 @@ export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<Con
     publicKeyFingerprint: String(row.public_key_fingerprint), executable: false,
     createdBy: String(row.created_by), createdAt: String(row.created_at),
   }));
+  if (!workspace) throw new Error("Workspace configuration is unavailable.");
   return {
-    workspace: { id: WORKSPACE_ID, name: "Northstar Labs", dataMode: "demo", role: user.role },
+    workspace: { id: WORKSPACE_ID, name: workspace.name, dataMode: workspace.data_mode, role: user.role },
     runs, connectors, evidence, remediations, audit, runners, auditChainValid: await verifyAuditChain(db),
   };
 }
@@ -321,7 +316,6 @@ export async function createRunnerEnrollment(
   input: { name: string; publicKeyFingerprint: string },
 ): Promise<RunnerRecord> {
   const db = database();
-  await initializeControlPlane(db, user);
   await enforceRateLimit(db, `runner-enroll:${user.email.toLowerCase()}`, 3, 300);
   const now = new Date().toISOString();
   const record: RunnerRecord = {
@@ -341,7 +335,7 @@ export async function createRunnerEnrollment(
 
 export async function createAssessmentReport(user: AuthorizedUser) {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `report:${user.email.toLowerCase()}`, 10, 60);
   const catalog = await getExposureCatalog(user);
   const snapshot = await getControlPlaneSnapshot(user);
   const issuedAt = new Date().toISOString();
@@ -379,7 +373,7 @@ export async function decideValidationRun(
   reason: string,
 ): Promise<void> {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `decision:${user.email.toLowerCase()}`, 30, 60);
   await expireStalePlans(db);
   const row = await db.prepare(`SELECT status, requested_by, expires_at FROM validation_runs
     WHERE id = ? AND workspace_id = ?`).bind(runId, WORKSPACE_ID)
@@ -407,7 +401,7 @@ export async function createRemediation(
   input: { pathId: string; owner: string; dueAt: string },
 ): Promise<RemediationRecord> {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `remediation-create:${user.email.toLowerCase()}`, 20, 60);
   const path = await findAttackPath(db, input.pathId);
   if (!path) throw new ValidationError("Unknown attack path.");
   const existing = await db.prepare("SELECT id FROM remediations WHERE workspace_id = ? AND path_id = ? AND status != 'Closed'")
@@ -434,7 +428,7 @@ export async function updateRemediation(
   input: { status: RemediationRecord["status"] },
 ): Promise<void> {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `remediation-update:${user.email.toLowerCase()}`, 60, 60);
   const result = await db.prepare("UPDATE remediations SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?")
     .bind(input.status, new Date().toISOString(), id, WORKSPACE_ID).run();
   if (!result.meta.changes) throw new NotFoundError("Remediation not found.");
@@ -443,7 +437,7 @@ export async function updateRemediation(
 
 export async function createDiscoveryPlan(user: AuthorizedUser, connectorId: string) {
   const db = database();
-  await initializeControlPlane(db, user);
+  await enforceRateLimit(db, `discovery:${user.email.toLowerCase()}`, 10, 60);
   const connector = await db.prepare("SELECT id, account_id, status FROM connectors WHERE id = ? AND workspace_id = ?")
     .bind(connectorId, WORKSPACE_ID).first<{ id: string; account_id: string; status: string }>();
   if (!connector || connector.status === "Disabled") throw new NotFoundError("Active connector not found.");
@@ -461,91 +455,6 @@ export async function exportGuardrailPolicy(user: AuthorizedUser) {
   const payload = { schema: "cloudpen.guardrails.v1", workspaceId: WORKSPACE_ID, policy, issuedAt: new Date().toISOString(), executable: false };
   const canonical = canonicalJson(payload);
   return { payload, integrity: { algorithm: "HMAC-SHA-256", keyId: "cloudpen-plan-v1", digest: await sha256(canonical), signature: await hmac(canonical) } };
-}
-
-async function initializeControlPlane(db: D1Database, user: AuthorizedUser): Promise<void> {
-  await db.batch([
-    db.prepare("CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, data_mode TEXT NOT NULL DEFAULT 'demo' CHECK (data_mode IN ('demo', 'live')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS memberships (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('admin', 'operator', 'reviewer', 'viewer')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(workspace_id, email))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS guardrail_policies (workspace_id TEXT PRIMARY KEY, require_approval INTEGER NOT NULL DEFAULT 1 CHECK (require_approval IN (0, 1)), canary_only INTEGER NOT NULL DEFAULT 1 CHECK (canary_only IN (0, 1)), redact_evidence INTEGER NOT NULL DEFAULT 1 CHECK (redact_evidence IN (0, 1)), cleanup_required INTEGER NOT NULL DEFAULT 1 CHECK (cleanup_required IN (0, 1)), max_concurrency INTEGER NOT NULL DEFAULT 2 CHECK (max_concurrency BETWEEN 1 AND 4), max_session_minutes INTEGER NOT NULL DEFAULT 15 CHECK (max_session_minutes BETWEEN 1 AND 30), updated_by TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS validation_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, attack_path_id TEXT NOT NULL, name TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('Read-only', 'Active canary')), status TEXT NOT NULL CHECK (status IN ('Planned', 'Awaiting approval', 'Approved', 'Rejected', 'Expired', 'Stopped', 'Completed')), requested_by TEXT NOT NULL, approved_by TEXT, authorization_digest TEXT NOT NULL, plan_signature TEXT NOT NULL, expires_at TEXT NOT NULL, decision_reason TEXT, findings INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS connectors (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, provider TEXT NOT NULL DEFAULT 'AWS' CHECK (provider = 'AWS'), name TEXT NOT NULL, account_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('Draft', 'Awaiting verification', 'Verified', 'Runner required', 'Disabled', 'Error')), external_id_digest TEXT NOT NULL, external_id_hint TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_sync_at TEXT, error_message TEXT, UNIQUE(workspace_id, account_id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS evidence_packages (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, path_id TEXT NOT NULL, classification TEXT NOT NULL, digest TEXT NOT NULL, signature TEXT NOT NULL, key_id TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS remediations (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, path_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('Open', 'In progress', 'Risk accepted', 'Ready to revalidate', 'Closed')), priority TEXT NOT NULL CHECK (priority IN ('Critical', 'High', 'Medium', 'Low')), owner TEXT NOT NULL, due_at TEXT NOT NULL, guidance TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS discovery_jobs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, connector_id TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('Planned', 'Runner required', 'Completed', 'Failed')), scope_json TEXT NOT NULL, executable INTEGER NOT NULL DEFAULT 0 CHECK (executable = 0), created_by TEXT NOT NULL, created_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS runner_enrollments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('Pending', 'Disabled')), public_key_fingerprint TEXT NOT NULL, executable INTEGER NOT NULL DEFAULT 0 CHECK (executable = 0), created_by TEXT NOT NULL, created_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS exposure_snapshots (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, source TEXT NOT NULL CHECK (source IN ('demo-seed', 'aws-read-only')), status TEXT NOT NULL CHECK (status IN ('Complete', 'Partial')), collected_at TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS cloud_accounts (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, provider_account_id TEXT NOT NULL, data_json TEXT NOT NULL, UNIQUE(workspace_id, provider_account_id))"),
-    db.prepare("CREATE TABLE IF NOT EXISTS cloud_assets (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, data_json TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS exposure_paths (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, data_json TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS graph_edges (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, snapshot_id TEXT NOT NULL, source_node TEXT NOT NULL, target_node TEXT NOT NULL, relationship TEXT NOT NULL, evidence_json TEXT NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS audit_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, actor_email TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, details_json TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL, created_at TEXT NOT NULL)"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS audit_events_chain_link ON audit_events (workspace_id, previous_hash)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS validation_runs_workspace_created ON validation_runs (workspace_id, created_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS audit_events_workspace_created ON audit_events (workspace_id, created_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS connectors_workspace_created ON connectors (workspace_id, created_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS evidence_workspace_created ON evidence_packages (workspace_id, created_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS remediations_workspace_updated ON remediations (workspace_id, updated_at)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS exposure_paths_workspace_snapshot ON exposure_paths (workspace_id, snapshot_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS cloud_assets_workspace_snapshot ON cloud_assets (workspace_id, snapshot_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS graph_edges_workspace_snapshot ON graph_edges (workspace_id, snapshot_id)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL)"),
-  ]);
-  await ensureRuntimeSchemaCompatibility(db);
-  await db.prepare("INSERT OR IGNORE INTO workspaces (id, name) VALUES (?, ?)").bind(WORKSPACE_ID, "Northstar Labs").run();
-  await db.prepare(`INSERT OR IGNORE INTO memberships (id, workspace_id, email, role) VALUES (?, ?, ?, ?)`)
-    .bind(`${WORKSPACE_ID}:${user.email.toLowerCase()}`, WORKSPACE_ID, user.email.toLowerCase(), user.role)
-    .run();
-  await db.prepare(`INSERT OR IGNORE INTO guardrail_policies
-      (workspace_id, require_approval, canary_only, redact_evidence, cleanup_required, max_concurrency, max_session_minutes, updated_by)
-      VALUES (?, 1, 1, 1, 1, 2, 15, ?)`)
-    .bind(WORKSPACE_ID, user.email)
-    .run();
-  const demoSnapshotId = `${WORKSPACE_ID}:demo-v1`;
-  const seeded = await db.prepare("SELECT id FROM exposure_snapshots WHERE id = ? AND workspace_id = ?")
-    .bind(demoSnapshotId, WORKSPACE_ID).first<{ id: string }>();
-  if (!seeded) {
-    await db.prepare(`INSERT INTO exposure_snapshots (id, workspace_id, source, status, collected_at)
-      VALUES (?, ?, 'demo-seed', 'Complete', ?)`)
-      .bind(demoSnapshotId, WORKSPACE_ID, "2026-08-03T00:00:00.000Z").run();
-    await db.batch([
-    ...demoAccounts.map((account) => db.prepare(`INSERT OR IGNORE INTO cloud_accounts
-      (id, workspace_id, snapshot_id, provider_account_id, data_json) VALUES (?, ?, ?, ?, ?)`)
-      .bind(`${WORKSPACE_ID}:${account.id}`, WORKSPACE_ID, demoSnapshotId, account.id.replaceAll("-", ""), canonicalJson(account))),
-    ...demoAssets.map((asset) => db.prepare(`INSERT OR IGNORE INTO cloud_assets
-      (id, workspace_id, snapshot_id, data_json) VALUES (?, ?, ?, ?)`)
-      .bind(`${WORKSPACE_ID}:${asset.id}`, WORKSPACE_ID, demoSnapshotId, canonicalJson(asset))),
-    ...demoAttackPaths.map((path) => db.prepare(`INSERT OR IGNORE INTO exposure_paths
-      (id, workspace_id, snapshot_id, data_json) VALUES (?, ?, ?, ?)`)
-      .bind(`${WORKSPACE_ID}:${path.id}`, WORKSPACE_ID, demoSnapshotId, canonicalJson(path))),
-    ...demoAttackPaths.flatMap((path) => path.steps.slice(0, -1).map((step, index) => db.prepare(`INSERT OR IGNORE INTO graph_edges
-      (id, workspace_id, snapshot_id, source_node, target_node, relationship, evidence_json) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .bind(`${WORKSPACE_ID}:${path.id}:${index}`, WORKSPACE_ID, demoSnapshotId, step.label, path.steps[index + 1].label,
-        step.type === "permission" ? "permits" : "reaches", canonicalJson({ pathId: path.id, evidence: path.evidence })))),
-    ]);
-  }
-}
-
-async function ensureRuntimeSchemaCompatibility(db: D1Database): Promise<void> {
-  const workspaceColumns = await db.prepare("PRAGMA table_info(workspaces)").all<{ name: string }>();
-  if (!workspaceColumns.results.some((column) => column.name === "data_mode")) {
-    await db.prepare("ALTER TABLE workspaces ADD data_mode TEXT NOT NULL DEFAULT 'demo' CHECK (data_mode IN ('demo', 'live'))").run();
-  }
-
-  const runColumns = await db.prepare("PRAGMA table_info(validation_runs)").all<{ name: string }>();
-  if (!runColumns.results.some((column) => column.name === "expires_at")) {
-    await db.batch([
-      db.prepare("ALTER TABLE validation_runs RENAME TO validation_runs_legacy"),
-      db.prepare("DROP INDEX IF EXISTS validation_runs_workspace_created"),
-      db.prepare("CREATE TABLE validation_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, attack_path_id TEXT NOT NULL, name TEXT NOT NULL, mode TEXT NOT NULL CHECK (mode IN ('Read-only', 'Active canary')), status TEXT NOT NULL CHECK (status IN ('Planned', 'Awaiting approval', 'Approved', 'Rejected', 'Expired', 'Stopped', 'Completed')), requested_by TEXT NOT NULL, approved_by TEXT, authorization_digest TEXT NOT NULL, plan_signature TEXT NOT NULL, expires_at TEXT NOT NULL, decision_reason TEXT, findings INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
-      db.prepare(`INSERT INTO validation_runs
-        (id, workspace_id, attack_path_id, name, mode, status, requested_by, approved_by, authorization_digest, plan_signature, expires_at, decision_reason, findings, created_at, updated_at)
-        SELECT id, workspace_id, attack_path_id, name, mode, status, requested_by, approved_by, authorization_digest, plan_signature,
-          datetime(created_at, '+15 minutes'), NULL, findings, created_at, updated_at FROM validation_runs_legacy`),
-      db.prepare("DROP TABLE validation_runs_legacy"),
-      db.prepare("CREATE INDEX validation_runs_workspace_created ON validation_runs (workspace_id, created_at)"),
-    ]);
-  }
 }
 
 async function findAttackPath(db: D1Database, pathId: string): Promise<AttackPath | null> {

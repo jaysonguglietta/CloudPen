@@ -43,7 +43,7 @@
     "typescript-eslint": "^8.67.0",
     "vinext": "^0.0.50",
     "vite": "^8.2.1",
-    "wrangler": "^4.120.1"
+    "wrangler": "^4.121.0"
   },
   "overrides": {
     "postcss": "8.5.25",
