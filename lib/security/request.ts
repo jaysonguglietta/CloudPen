@@ -63,7 +63,12 @@ async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel("Request body exceeded the configured limit.");
+        try {
+          await reader.cancel("Request body exceeded the configured limit.");
+        } catch {
+          // Some Worker stream adapters reject cancellation after delivering
+          // the over-limit chunk. The security decision must remain 413.
+        }
         throw new RequestSecurityError(413, "Request body is too large.");
       }
       chunks.push(value);
