@@ -74,7 +74,12 @@ async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<
       chunks.push(value);
     }
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch {
+      // A cancelled Worker stream can release itself. Cleanup errors must not
+      // replace the bounded-body security response.
+    }
   }
 
   const body = new Uint8Array(total);
