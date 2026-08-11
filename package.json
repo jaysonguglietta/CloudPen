@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "security:audit": "npm audit --omit=dev --audit-level=high",
     "security:audit:all": "npm audit --audit-level=high",
+    "security:audit:exceptions": "node scripts/audit-exceptions.mjs",
     "security:check": "node scripts/security-check.mjs",
     "docs:check": "node scripts/check-docs.mjs",
     "sbom": "npm sbom --sbom-format=cyclonedx > cloudpen-sbom.cdx.json"

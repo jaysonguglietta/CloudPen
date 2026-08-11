@@ -199,22 +199,22 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 
 **CWE/OWASP:** CWE-778; OWASP A09 Security Logging and Monitoring Failures.
 
-### SR-06 — CSP permits inline script and style execution
+### SR-06 — CSP permits inline style execution
 
-- **Severity:** Medium
+- **Severity:** Low residual risk
 - **Confidence:** High
 - **Affected:** `worker/index.ts`
-- **Status:** Framework-hardening gap
+- **Status:** Script execution remediated; inline style compatibility remains
 
-**Description:** The CSP restricts origins but includes `'unsafe-inline'` for scripts and styles to support current framework bootstrap behavior.
+**Description:** Every HTML response now receives a fresh 144-bit nonce. A streaming `HTMLRewriter` applies it to every framework script, `script-src` uses the nonce with `strict-dynamic`, and `script-src-attr 'none'` blocks event-handler attributes. `style-src` still includes `'unsafe-inline'` for current framework styling compatibility.
 
 **Exploitation scenario:** A future HTML injection bug has a larger path to script execution because inline scripts are permitted.
 
 **Impact:** Increased XSS impact, session actions under the victim identity, topology exposure, and plan abuse within the victim role.
 
-**Recommended fix:** Implement per-response nonces or hashes integrated with server rendering, remove `'unsafe-inline'`, add Trusted Types where supported, and retain output encoding. Do not weaken `connect-src`, `object-src`, or `frame-ancestors`.
+**Recommended fix:** Keep the script nonce regression tests. Evaluate style nonces/hashes and Trusted Types after framework compatibility testing without weakening `connect-src`, `object-src`, or `frame-ancestors`.
 
-**Validation:** Browser CSP tests must prove hydration works and injected inline/event-handler/script payloads are blocked.
+**Validation:** Integration tests prove nonces are unpredictable, every script receives the matching response nonce, `unsafe-inline` is absent from `script-src`, and script attributes are disabled. Full browser injection coverage remains required before real customer data.
 
 **CWE/OWASP:** CWE-79; OWASP A03 Injection.
 

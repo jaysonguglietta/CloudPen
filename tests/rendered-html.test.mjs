@@ -120,6 +120,24 @@ test("server-renders the authorized CloudPen application shell", async () => {
   assert.doesNotMatch(html, /codex-preview/);
 });
 
+test("nonces every script and blocks inline script attributes", async () => {
+  const first = await render();
+  const policy = first.headers.get("content-security-policy") ?? "";
+  const nonce = policy.match(/script-src 'nonce-([^']+)' 'strict-dynamic'/)?.[1];
+  assert.ok(nonce);
+  assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
+  assert.match(policy, /script-src-attr 'none'/);
+  const html = await first.text();
+  const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((match) => match[0]);
+  assert.ok(scripts.length > 0);
+  assert.ok(scripts.every((script) => script.includes(`nonce="${nonce}"`)));
+
+  const secondPolicy = (await render()).headers.get("content-security-policy") ?? "";
+  const secondNonce = secondPolicy.match(/script-src 'nonce-([^']+)' 'strict-dynamic'/)?.[1];
+  assert.ok(secondNonce);
+  assert.notEqual(secondNonce, nonce);
+});
+
 test("includes accessible navigation and controls", async () => {
   const html = await (await render()).text();
   assert.match(html, /aria-label="Primary navigation"/);
@@ -518,5 +536,22 @@ test("exports a signed assessment with provenance and no execution authority", a
   assert.equal(body.payload.assurance.executable, false);
   assert.equal(body.payload.assurance.auditChainValid, true);
   assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+});
+
+test("emits correlated structured telemetry without request bodies or secrets", async () => {
+  const marker = "log-injection-marker\\nforged-event";
+  const response = await fetch(`${origin}/api/connectors`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ name: marker, accountId: "not-an-account", externalId: "not-a-secret" }),
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(output, /cloudpen\.security-event\.v1/);
+  assert.match(output, /request_validation_denied/);
+  assert.match(output, /"route":"\/api\/connectors"/);
+  assert.doesNotMatch(output, /log-injection-marker|forged-event|test-secret-token-value/);
+  assert.doesNotMatch(output, /cpv1_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq/);
 });
 });
