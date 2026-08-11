@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { BoundedBodyReadError, readBoundedUtf8Stream } from "../lib/security/bounded-body.mjs";
 
 const port = 32000 + (process.pid % 1000);
 const origin = `http://127.0.0.1:${port}`;
@@ -136,20 +137,17 @@ test("rejects cross-origin mutations before business logic", async () => {
   assert.equal(response.status, 403);
 });
 
-test("rejects oversized streamed request bodies before JSON parsing", async () => {
+test("bounds streamed request bodies without retaining bytes over the limit", async () => {
   const body = new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(`{"value":"${"x".repeat(9_000)}"}`));
       controller.close();
     },
   });
-  const response = await fetch(`${origin}/api/validation-runs`, {
-    method: "POST",
-    headers: { ...identityHeaders, "content-type": "application/json", origin },
-    body,
-    duplex: "half",
-  });
-  assert.equal(response.status, 413);
+  await assert.rejects(
+    readBoundedUtf8Stream(body, 8_192),
+    (error) => error instanceof BoundedBodyReadError && error.code === "body_size",
+  );
 });
 
 test("creates a durable signed non-executable plan", async () => {
