@@ -56,6 +56,7 @@ async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let exceededLimit = false;
 
   try {
     while (true) {
@@ -63,24 +64,22 @@ async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        try {
-          await reader.cancel("Request body exceeded the configured limit.");
-        } catch {
-          // Some Worker stream adapters reject cancellation after delivering
-          // the over-limit chunk. The security decision must remain 413.
-        }
-        throw new RequestSecurityError(413, "Request body is too large.");
+        exceededLimit = true;
+        chunks.length = 0;
+        continue;
       }
-      chunks.push(value);
+      if (!exceededLimit) chunks.push(value);
     }
   } finally {
     try {
       reader.releaseLock();
     } catch {
-      // A cancelled Worker stream can release itself. Cleanup errors must not
-      // replace the bounded-body security response.
+      // Worker adapters can release a disturbed stream themselves. Cleanup
+      // errors must not replace the bounded-body security response.
     }
   }
+
+  if (exceededLimit) throw new RequestSecurityError(413, "Request body is too large.");
 
   const body = new Uint8Array(total);
   let offset = 0;
