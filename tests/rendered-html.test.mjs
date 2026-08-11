@@ -132,7 +132,6 @@ test("rejects cross-origin mutations before business logic", async () => {
   const response = await fetch(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin: "https://attacker.example" },
-    body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
   });
   assert.equal(response.status, 403);
 });
@@ -198,7 +197,6 @@ test("enforces application roles independently of identity", async () => {
       "content-type": "application/json",
       origin,
     },
-    body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
   });
   assert.equal(response.status, 403);
 });
