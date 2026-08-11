@@ -1,3 +1,5 @@
+import { BoundedBodyReadError, readBoundedUtf8Stream } from "./bounded-body.mjs";
+
 const MAX_JSON_BYTES = 8_192;
 
 export class RequestSecurityError extends Error {
@@ -38,7 +40,18 @@ export function enforceMutationRequest(request: Request): void {
 }
 
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const text = await readBoundedUtf8Body(request, MAX_JSON_BYTES);
+  let text: string;
+  try {
+    text = await readBoundedUtf8Stream(request.body, MAX_JSON_BYTES);
+  } catch (error) {
+    if (error instanceof BoundedBodyReadError) {
+      if (error.code === "body_size") {
+        throw new RequestSecurityError(413, error.message);
+      }
+      throw new RequestSecurityError(400, error.message);
+    }
+    throw error;
+  }
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -49,50 +62,6 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
     throw new RequestSecurityError(400, "A JSON object is required.");
   }
   return value as Record<string, unknown>;
-}
-
-async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<string> {
-  if (!request.body) return "";
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let exceededLimit = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        exceededLimit = true;
-        chunks.length = 0;
-        continue;
-      }
-      if (!exceededLimit) chunks.push(value);
-    }
-  } catch {
-    // Some Worker adapters surface a transport read failure after delivering
-    // the final chunk. Preserve the size denial once the cap was crossed;
-    // otherwise report a malformed transport without exposing adapter details.
-    if (exceededLimit || total > maxBytes) {
-      throw new RequestSecurityError(413, "Request body is too large.");
-    }
-    throw new RequestSecurityError(400, "Request body could not be read.");
-  }
-
-  if (exceededLimit) throw new RequestSecurityError(413, "Request body is too large.");
-
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(body);
-  } catch {
-    throw new RequestSecurityError(400, "Request body must be valid UTF-8.");
-  }
 }
 
 export function safeApiError(error: unknown): Response {
