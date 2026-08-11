@@ -15,6 +15,9 @@ for (const file of forbiddenArtifacts) {
 const worker = await readFile("dist/server/index.js", "utf8");
 assert.doesNotMatch(worker, /Maya Chen/, "hard-coded operator identity leaked into the server bundle");
 assert.match(worker, /Content-Security-Policy/, "security headers are missing from the worker bundle");
+assert.match(worker, /script-src-attr 'none'/, "inline script attributes are not blocked");
+assert.doesNotMatch(worker, /script-src 'self' 'unsafe-inline'/, "unsafe-inline script execution leaked into CSP");
+assert.match(worker, /cloudpen\.security-event\.v1/, "structured security telemetry is missing");
 assert.doesNotMatch(worker, /image-size/, "build-only image parser leaked into the deployed worker bundle");
 assert.doesNotMatch(worker, /CREATE TABLE IF NOT EXISTS/, "request-time schema creation leaked into the deployed worker bundle");
 

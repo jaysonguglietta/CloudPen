@@ -554,9 +554,10 @@ async function findAttackPath(db: D1Database, pathId: string): Promise<AttackPat
 
 async function expireStalePlans(db: D1Database): Promise<void> {
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE validation_runs SET status = 'Expired', updated_at = ?
+  const result = await db.prepare(`UPDATE validation_runs SET status = 'Expired', updated_at = ?
     WHERE workspace_id = ? AND status IN ('Planned', 'Awaiting approval', 'Approved') AND expires_at <= ?`)
     .bind(now, WORKSPACE_ID, now).run();
+  if (result.meta.changes) emitServiceSecurityEvent("automatic_plan_expiration", { count: result.meta.changes });
 }
 
 async function verifyAuditChain(db: D1Database): Promise<boolean> {
@@ -575,18 +576,18 @@ async function verifyAuditChain(db: D1Database): Promise<boolean> {
   while (byPrevious.has(previousHash)) {
     const row = byPrevious.get(previousHash)!;
     let details: unknown;
-    try { details = JSON.parse(String(row.details_json)); } catch { return false; }
+    try { details = JSON.parse(String(row.details_json)); } catch { return auditVerificationFailure("invalid_details_json"); }
     const event = {
       id: String(row.id), workspaceId: WORKSPACE_ID, actorEmail: String(row.actor_email),
       action: String(row.action), target: String(row.target), details,
       previousHash: String(row.previous_hash), createdAt: String(row.created_at),
     };
     const expected = await sha256(canonicalJson(event));
-    if (expected !== String(row.event_hash)) return false;
+    if (expected !== String(row.event_hash)) return auditVerificationFailure("event_hash_mismatch");
     previousHash = String(row.event_hash);
     visited += 1;
   }
-  return visited === rows.length;
+  return visited === rows.length || auditVerificationFailure("chain_length_mismatch");
 }
 
 async function enforceRateLimit(db: D1Database, key: string, limit: number, windowSeconds: number): Promise<void> {
@@ -695,8 +696,29 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function hmac(value: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(signingKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return toBase64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+  try {
+    const key = await crypto.subtle.importKey("raw", encoder.encode(signingKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return toBase64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+  } catch (error) {
+    emitServiceSecurityEvent("signing_failure", { errorType: error instanceof Error ? error.name : "UnknownError" });
+    throw error;
+  }
+}
+
+function auditVerificationFailure(reason: string): false {
+  emitServiceSecurityEvent("audit_verification_failed", { reason });
+  return false;
+}
+
+function emitServiceSecurityEvent(category: string, fields: Record<string, string | number>): void {
+  console.warn(JSON.stringify({
+    schema: "cloudpen.security-event.v1",
+    timestamp: new Date().toISOString(),
+    requestId: null,
+    category,
+    outcome: "alert",
+    ...fields,
+  }));
 }
 
 function toBase64Url(value: ArrayBuffer): string {

@@ -12,9 +12,11 @@ npm run docs:check
 npm test
 npm run security:check
 npm run security:audit
+npm run build
+npm run security:audit:exceptions
 ```
 
-`security:audit` checks deployable production dependencies. Also run `npm run security:audit:all` to report build/dev-only advisories. The current full audit tracks two unpatched `image-size@2.0.2` denial-of-service advisories through Vinext; the package is build-only and the artifact check prevents it from entering the Worker bundle. This exception must be re-evaluated on every Vinext/image-size release and becomes a release blocker if the package becomes runtime-reachable or processes untrusted build inputs.
+`security:audit` checks deployable production dependencies. `security:audit:exceptions` runs the full audit and permits only GHSA-w3rx-r6r6-pgpr and GHSA-5p2g-fcmc-qvqq through the build-only Vinext/image-size path. The exception is owned by the CloudPen maintainers, expires on 2026-09-30, asserts that Vinext remains a development dependency, and fails if `image-size` enters the Worker bundle or any other High/Critical advisory appears. CI bounds the complete build/test process to five minutes. Upgrade immediately when upstream publishes a compatible fix.
 
 Generate an SBOM for release evidence:
 
@@ -30,7 +32,7 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 
 - unauthenticated redirect to the platform sign-in path;
 - authorized server rendering and accessible primary controls;
-- CSP, frame denial, and MIME-sniffing protection;
+- per-response CSP script nonces, script-attribute denial, frame denial, and MIME-sniffing protection;
 - canonical metadata that ignores attacker-controlled `Host`;
 - cross-origin mutation rejection;
 - durable signed read-only plan creation with `executable: false`;
@@ -43,6 +45,7 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 - evidence-manifest retention and remediation state transitions;
 - pending runner enrollment constrained to `executable: false`;
 - signed assessment export and audit-chain verification.
+- correlated structured telemetry with request-body, External ID, and evidence-secret non-disclosure.
 
 `scripts/security-check.mjs` also verifies that clean builds do not package stale starter assets, the old hard-coded operator identity is absent, security-header code is present, and the local launcher cannot bind to all interfaces.
 
@@ -75,7 +78,7 @@ Automation does not replace review. Before a hosted release, confirm:
 - Retention, deletion, backup, and restoration tests.
 - Multi-workspace isolation tests after tenancy is designed.
 - Load and abuse testing for large authenticated request volumes.
-- Browser CSP regression testing with nonce-based policy.
+- Full browser CSP injection testing for script elements, event attributes, JavaScript URLs, styles, and Trusted Types compatibility.
 - Privacy review of topology and evidence fields.
 
 ## Additional tests required before a runner

@@ -22,6 +22,12 @@ Keep CloudPen available for authorized control-plane evaluation without enabling
 - Periodically create and inspect a synthetic signed plan and evidence package.
 - Verify that the runner remains disabled and no AWS credentials exist.
 
+### Security telemetry and SIEM export
+
+Each trusted entry-point request emits one JSON event with schema `cloudpen.security-event.v1`, a random request ID also returned as `X-Request-ID`, timestamp, normalized route template, method, category, outcome, status, duration, capability class, role, hashed actor ID, and local-mode flag. Query strings, bodies, evidence values, External IDs, credentials, tokens, signing material, and raw email addresses are excluded. JSON serialization prevents newline or field injection from changing the event structure.
+
+Hosted operators must export Worker logs with Cloudflare Logpush (or the hosting platform's equivalent) to an independently administered SIEM with encryption in transit/at rest, least-privilege access, immutable retention, and a documented deletion period. Alert on repeated `authorization_denied`, `cross_origin_denied`, `body_size_denied`, `rate_limit_denied`, `internal_failure`, and `identity_origin_denied` categories; any hosted event with `localMode: true`; audit-chain verification failure; and signing failures. Retain request telemetry for 90 days by default unless legal/privacy requirements specify a shorter period. Never enable body capture.
+
 ## Security signals
 
 Prioritize investigation of:
