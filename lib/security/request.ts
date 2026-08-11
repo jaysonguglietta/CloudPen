@@ -70,13 +70,14 @@ async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<
       }
       if (!exceededLimit) chunks.push(value);
     }
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {
-      // Worker adapters can release a disturbed stream themselves. Cleanup
-      // errors must not replace the bounded-body security response.
+  } catch {
+    // Some Worker adapters surface a transport read failure after delivering
+    // the final chunk. Preserve the size denial once the cap was crossed;
+    // otherwise report a malformed transport without exposing adapter details.
+    if (exceededLimit || total > maxBytes) {
+      throw new RequestSecurityError(413, "Request body is too large.");
     }
+    throw new RequestSecurityError(400, "Request body could not be read.");
   }
 
   if (exceededLimit) throw new RequestSecurityError(413, "Request body is too large.");
