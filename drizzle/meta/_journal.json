@@ -15,6 +15,13 @@
       "when": 1785758400000,
       "tag": "0001_complete_control_plane",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786420800000,
+      "tag": "0002_seed_demo_workspace",
+      "breakpoints": true
     }
   ]
 }

@@ -28,11 +28,11 @@ There is no supported self-hosted public deployment and no production AWS runner
 | `CLOUDPEN_PLAN_SIGNING_KEY` | Hosted | Yes | Unique high-entropy HMAC key, minimum 32 characters |
 | `PUBLIC_APP_ORIGIN` | Hosted | No | Exact canonical HTTPS origin, with no path or credentials |
 | `CLOUDPEN_LOCAL_DEV_EMAIL` | Local only | No | Optional development identity override |
-| `CLOUDPEN_LOCAL_MODE` | Local launcher only | No | Enables the loopback development identity and key fallback |
+| `CLOUDPEN_LOCAL_MODE` | Local launcher only | No | Enables the loopback-only development identity and an ephemeral per-process signing key when no key is configured |
 
 Email matching is case-insensitive. If an email occurs in multiple lists, the first role wins in this order: admin, operator, reviewer, viewer. Avoid duplicate membership to keep intent unambiguous.
 
-Never commit a real signing key or use the local fallback in a shared environment. `.env.example` documents keys only; all `.env*` values except the example are ignored.
+Never commit a real signing key or use local mode in a shared environment. The ephemeral local key changes when the Worker restarts and is not suitable for durable verification. `.env.example` documents keys only; all `.env*` values except the example are ignored.
 
 ## Durable binding
 
@@ -50,7 +50,7 @@ Open `http://127.0.0.1:8787`.
 
 The launcher:
 
-- invokes the built Worker through Wrangler;
+- applies all pending D1 migrations, then invokes the built Worker through Wrangler;
 - binds only to IPv4 loopback;
 - persists D1 development state under `.wrangler/state`;
 - sets local mode and the canonical local origin;

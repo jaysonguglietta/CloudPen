@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,17 @@ let stateDirectory;
 describe("CloudPen built Worker", { concurrency: false }, () => {
 before(async () => {
   stateDirectory = await mkdtemp(join(tmpdir(), "cloudpen-security-tests-"));
+  const migration = spawnSync("./node_modules/.bin/wrangler", [
+    "d1", "migrations", "apply", "site-creator-d1",
+    "--local",
+    "--config", "dist/server/wrangler.json",
+    "--persist-to", stateDirectory,
+  ], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "migration.log") },
+    encoding: "utf8",
+  });
+  assert.equal(migration.status, 0, `${migration.stdout ?? ""}\n${migration.stderr ?? ""}`);
   server = spawn("./node_modules/.bin/wrangler", [
     "dev",
     "--config", "dist/server/wrangler.json",
@@ -32,7 +43,7 @@ before(async () => {
     "--var", `PUBLIC_APP_ORIGIN:${origin}`,
   ], {
     cwd: new URL("..", import.meta.url),
-    env: process.env,
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "server.log") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   server.stdout.on("data", (chunk) => { output += chunk; });
@@ -102,10 +113,17 @@ test("includes accessible navigation and controls", async () => {
   assert.match(html, /aria-label="Select cloud account"/);
 });
 
-test("does not trust Host when generating social metadata", async () => {
-  const html = await (await render({ host: "attacker.example" })).text();
-  assert.doesNotMatch(html, /attacker\.example\/og\.png/);
+test("uses the configured origin for social metadata", async () => {
+  const html = await (await render()).text();
   assert.match(html, new RegExp(`${origin.replaceAll("/", "\\/")}\\/og\\.png`));
+});
+
+test("rejects identity headers delivered on an alternate origin", async () => {
+  const response = await fetch(`http://localhost:${port}/`, {
+    headers: { accept: "text/html", ...identityHeaders },
+    redirect: "manual",
+  });
+  assert.equal(response.status, 403);
 });
 
 test("rejects cross-origin mutations before business logic", async () => {
@@ -115,6 +133,22 @@ test("rejects cross-origin mutations before business logic", async () => {
     body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
   });
   assert.equal(response.status, 403);
+});
+
+test("rejects oversized streamed request bodies before JSON parsing", async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(`{"value":"${"x".repeat(9_000)}"}`));
+      controller.close();
+    },
+  });
+  const response = await fetch(`${origin}/api/validation-runs`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body,
+    duplex: "half",
+  });
+  assert.equal(response.status, 413);
 });
 
 test("creates a durable signed non-executable plan", async () => {
@@ -239,7 +273,11 @@ test("enforces separation of duties for active-plan approval", async () => {
 });
 
 test("creates retained evidence manifests and tracked remediation", async () => {
-  const evidence = await fetch(`${origin}/api/evidence/CP-1042`, { headers: identityHeaders });
+  const evidence = await fetch(`${origin}/api/evidence/CP-1042`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
   const evidenceBody = await evidence.json();
   assert.equal(evidence.status, 200);
   assert.match(evidenceBody.packageId, /^EV-[A-Z0-9]{8}$/);
@@ -293,7 +331,11 @@ test("stages runner enrollment without creating an execution capability", async 
 });
 
 test("exports a signed assessment with provenance and no execution authority", async () => {
-  const response = await fetch(`${origin}/api/reports/export`, { headers: identityHeaders });
+  const response = await fetch(`${origin}/api/reports/export`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.payload.schema, "cloudpen.assessment.v1");

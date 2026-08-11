@@ -4,19 +4,19 @@ CloudPen is a security-validation control plane. It does not currently execute A
 
 ## Implemented controls
 
-- Sites provides the external identity boundary; application roles are enforced from explicit email allowlists.
-- Local development binds to loopback and uses a development identity only in explicit local mode or while `NODE_ENV=development`.
+- Sites provides the external identity boundary; identity headers are accepted only on the configured canonical origin, and application roles are enforced from explicit email allowlists.
+- Local development binds to loopback and uses a development identity only in explicit local mode. Local request verification is injected by the loopback Worker boundary, not accepted from clients.
 - Mutation APIs require same-origin requests, bounded JSON bodies, authorization, and D1-backed rate limits.
 - Validation requests create server-owned HMAC-signed plans. Plans are explicitly non-executable in this release.
 - Active canary plans enter `Awaiting approval`; the requester cannot cause execution.
-- Evidence exports are generated server-side, redacted, signed, and logged.
+- State-changing exports use same-origin `POST` requests. Evidence exports are generated server-side, redacted, signed, and logged.
 - Audit events form an append-only hash chain in D1.
 - Production safety controls cannot be disabled through the API.
 - Security headers, clean build outputs, dependency auditing, tests, and CI gates are enforced.
 
 ## Production prerequisites
 
-Set `CLOUDPEN_ADMIN_EMAILS` and a unique secret `CLOUDPEN_PLAN_SIGNING_KEY` in the Sites environment. Keep access mode private/custom. Do not place credentials in source, browser storage, D1, logs, or evidence.
+Set `CLOUDPEN_ADMIN_EMAILS`, an exact `PUBLIC_APP_ORIGIN`, and a unique secret `CLOUDPEN_PLAN_SIGNING_KEY` in the Sites environment. Keep access mode private/custom. Do not place credentials in source, browser storage, D1, logs, or evidence. Apply reviewed D1 migrations before serving a new release.
 
 ## Deliberately disabled
 

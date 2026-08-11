@@ -13,7 +13,11 @@ export type RuntimeBindings = {
 };
 
 const bindingKey = Symbol.for("cloudpen.runtime.bindings");
-type RuntimeGlobal = typeof globalThis & { [bindingKey]?: RuntimeBindings };
+const localSigningKeyKey = Symbol.for("cloudpen.runtime.local-signing-key");
+type RuntimeGlobal = typeof globalThis & {
+  [bindingKey]?: RuntimeBindings;
+  [localSigningKeyKey]?: string;
+};
 
 export function installRuntimeBindings(bindings: RuntimeBindings): void {
   (globalThis as RuntimeGlobal)[bindingKey] = bindings;
@@ -46,11 +50,20 @@ export function signingKey(): string {
   const configured = runtimeBindings().CLOUDPEN_PLAN_SIGNING_KEY?.trim();
   if (configured && configured.length >= 32) return configured;
 
-  if (process.env.NODE_ENV === "development" || runtimeBindings().CLOUDPEN_LOCAL_MODE === "1") {
-    return "cloudpen-local-development-signing-key-not-for-production";
+  if (runtimeBindings().CLOUDPEN_LOCAL_MODE === "1") {
+    const runtime = globalThis as RuntimeGlobal;
+    runtime[localSigningKeyKey] ??= randomBase64Url(32);
+    return runtime[localSigningKeyKey];
   }
 
   throw new Error("CLOUDPEN_PLAN_SIGNING_KEY is not configured.");
+}
+
+function randomBase64Url(byteLength: number): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 export function roleForEmail(email: string): CloudPenRole | null {

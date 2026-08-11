@@ -31,7 +31,7 @@ The system is not production-ready for real tenants or penetration testing. Its 
 - `GET/POST/PATCH /api/validation-runs`
 - `GET/PATCH /api/guardrails`
 - `POST /api/connectors`
-- `GET /api/evidence/{pathId}`
+- `POST /api/evidence/{pathId}`
 - `GET /api/control-plane`, signed report/policy exports, remediation, discovery-plan, and runner-enrollment routes
 - `/_vinext/image`
 - Local Wrangler service on `127.0.0.1:8787`
@@ -241,16 +241,16 @@ See `architecture.md`. The highest current boundary is Sites identity to applica
 
 - **Severity:** Low
 - **Confidence:** High
-- **Affected:** `db/schema.ts`, `drizzle/0000_cloudpen_control_plane.sql`, `initializeControlPlane()`
-- **Status:** Maintenance risk
+- **Affected:** `db/schema.ts`, `drizzle/*.sql`, deployment and local startup
+- **Status:** Remediated; migrations are the only schema and seed authority
 
-**Description:** Table definitions exist in Drizzle schema, SQL migration, and runtime `CREATE TABLE IF NOT EXISTS` statements. Future drift can create different constraints between fresh runtime-created and migrated databases.
+**Description:** Previously, table definitions existed in Drizzle schema, SQL migration, and runtime `CREATE TABLE IF NOT EXISTS` statements. Request-time DDL and seeding have been removed; local startup and integration tests now apply reviewed migrations before traffic is served.
 
 **Exploitation scenario:** A future constraint is added only to migration while local/runtime initialization silently creates a weaker table.
 
 **Impact:** Environment-specific security behavior and missing database enforcement.
 
-**Recommended fix:** Make migrations the only production schema authority. If local bootstrap remains, generate it from reviewed migrations or test exact schema equivalence.
+**Recommended fix:** Keep migrations as the only production and local schema authority. Fail deployment or startup when migrations cannot be applied.
 
 **Validation:** Compare `sqlite_master` output for a migrated database and a fresh local database in CI.
 

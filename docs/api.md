@@ -170,11 +170,12 @@ Response:
 }
 ```
 
-## `GET /api/evidence/{pathId}`
+## `POST /api/evidence/{pathId}`
 
 Generates a redacted signed evidence package for a known synthetic path.
 
 - Capability: `read`
+- Request: same-origin `application/json` with an empty `{}` body
 - Rate limit: 20 exports per normalized user email per 60 seconds
 - Success: `200 application/json`
 - Disposition: attachment
@@ -194,7 +195,7 @@ The export also creates a retained evidence-manifest row containing package ID, 
 | `PATCH /api/remediations/{id}` | `plan` | Moves remediation through the supported workflow states |
 | `POST /api/connectors/{id}/discovery` | `connect` | Records a bounded AWS metadata-read-only discovery plan with `executable: false` |
 | `GET /api/guardrails/export` | `read` | Downloads a signed, non-executable policy envelope |
-| `GET /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state |
+| `POST /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state; requires same-origin JSON `{}` |
 | `POST /api/runners` | `enroll` (admin) | Pins a public-key fingerprint in `Pending` state with database-enforced `executable = 0` |
 
 ### Approval rules

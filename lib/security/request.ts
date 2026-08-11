@@ -12,9 +12,18 @@ export function enforceMutationRequest(request: Request): void {
     throw new RequestSecurityError(415, "Requests must use application/json.");
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BYTES) {
-    throw new RequestSecurityError(413, "Request body is too large.");
+  const rawContentLength = request.headers.get("content-length");
+  if (rawContentLength !== null) {
+    if (!/^\d+$/.test(rawContentLength)) {
+      throw new RequestSecurityError(400, "Content-Length must be a non-negative integer.");
+    }
+    const contentLength = Number(rawContentLength);
+    if (!Number.isSafeInteger(contentLength)) {
+      throw new RequestSecurityError(400, "Content-Length is invalid.");
+    }
+    if (contentLength > MAX_JSON_BYTES) {
+      throw new RequestSecurityError(413, "Request body is too large.");
+    }
   }
 
   const origin = request.headers.get("origin");
@@ -29,10 +38,7 @@ export function enforceMutationRequest(request: Request): void {
 }
 
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES) {
-    throw new RequestSecurityError(413, "Request body is too large.");
-  }
+  const text = await readBoundedUtf8Body(request, MAX_JSON_BYTES);
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -43,6 +49,40 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
     throw new RequestSecurityError(400, "A JSON object is required.");
   }
   return value as Record<string, unknown>;
+}
+
+async function readBoundedUtf8Body(request: Request, maxBytes: number): Promise<string> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("Request body exceeded the configured limit.");
+        throw new RequestSecurityError(413, "Request body is too large.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw new RequestSecurityError(400, "Request body must be valid UTF-8.");
+  }
 }
 
 export function safeApiError(error: unknown): Response {

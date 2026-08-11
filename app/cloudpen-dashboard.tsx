@@ -387,7 +387,11 @@ export default function CloudPenDashboard({
 
   async function exportEvidence(path: AttackPath) {
     try {
-      const response = await fetch(`/api/evidence/${encodeURIComponent(path.id)}`, { headers: { accept: "application/json" } });
+      const response = await fetch(`/api/evidence/${encodeURIComponent(path.id)}`, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: "{}",
+      });
       if (!response.ok) {
         const body = await response.json() as { error?: string };
         throw new Error(body.error || "Evidence export failed.");
@@ -496,7 +500,11 @@ export default function CloudPenDashboard({
   }
 
   async function exportAssessment() {
-    const response = await fetch("/api/reports/export", { headers: { accept: "application/json" } });
+    const response = await fetch("/api/reports/export", {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: "{}",
+    });
     if (!response.ok) return setToast("Assessment report could not be created.");
     const blob = await response.blob();
     const href = URL.createObjectURL(blob);
