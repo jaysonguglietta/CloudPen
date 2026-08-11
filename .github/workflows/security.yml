@@ -26,9 +26,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run security:audit
-      - run: npm run security:audit:exceptions
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run docs:check
       - run: timeout 5m npm test
+      - run: npm run security:audit:exceptions
       - run: npm run security:check
