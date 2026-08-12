@@ -285,7 +285,8 @@ test("persists connector records without returning the raw external ID", async (
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ externalId: rotatedExternalId }),
   });
-  assert.equal(rotation.status, 200);
+  const rotationBody = await rotation.text();
+  assert.equal(rotation.status, 200, `${rotationBody}\n${output}`);
   const afterRotation = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).text();
   assert.doesNotMatch(afterRotation, new RegExp(rotatedExternalId));
   assert.doesNotMatch(afterRotation, /externalIdDigest|external_id_digest/i);
