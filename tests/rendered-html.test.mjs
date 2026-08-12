@@ -27,32 +27,8 @@ async function request(input, init) {
   });
 }
 
-describe("CloudPen built Worker", { concurrency: false }, () => {
-before(async () => {
-  stateDirectory = await mkdtemp(join(tmpdir(), "cloudpen-security-tests-"));
-  const migration = spawnSync("./node_modules/.bin/wrangler", [
-    "d1", "migrations", "apply", "site-creator-d1",
-    "--local",
-    "--config", "dist/server/wrangler.json",
-    "--persist-to", stateDirectory,
-  ], {
-    cwd: new URL("..", import.meta.url),
-    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "migration.log") },
-    encoding: "utf8",
-  });
-  assert.equal(migration.status, 0, `${migration.stdout ?? ""}\n${migration.stderr ?? ""}`);
-  const fixture = spawnSync("./node_modules/.bin/wrangler", [
-    "d1", "execute", "site-creator-d1",
-    "--local",
-    "--config", "dist/server/wrangler.json",
-    "--persist-to", stateDirectory,
-    "--command", "UPDATE exposure_paths SET data_json = json_set(data_json, '$.evidence[0]', 'Authorization: Bearer test-secret-token-value') WHERE id = 'northstar-labs:CP-1024'",
-  ], {
-    cwd: new URL("..", import.meta.url),
-    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "fixture.log") },
-    encoding: "utf8",
-  });
-  assert.equal(fixture.status, 0, `${fixture.stdout ?? ""}\n${fixture.stderr ?? ""}`);
+async function startServer() {
+  output = "";
   server = spawn("./node_modules/.bin/wrangler", [
     "dev",
     "--config", "dist/server/wrangler.json",
@@ -84,16 +60,48 @@ before(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`CloudPen test server did not start.\n${output}`);
+}
+
+async function stopServer() {
+  if (!server || server.killed) return;
+  server.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolve) => server.once("exit", resolve)),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+}
+
+describe("CloudPen built Worker", { concurrency: false }, () => {
+before(async () => {
+  stateDirectory = await mkdtemp(join(tmpdir(), "cloudpen-security-tests-"));
+  const migration = spawnSync("./node_modules/.bin/wrangler", [
+    "d1", "migrations", "apply", "site-creator-d1",
+    "--local",
+    "--config", "dist/server/wrangler.json",
+    "--persist-to", stateDirectory,
+  ], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "migration.log") },
+    encoding: "utf8",
+  });
+  assert.equal(migration.status, 0, `${migration.stdout ?? ""}\n${migration.stderr ?? ""}`);
+  const fixture = spawnSync("./node_modules/.bin/wrangler", [
+    "d1", "execute", "site-creator-d1",
+    "--local",
+    "--config", "dist/server/wrangler.json",
+    "--persist-to", stateDirectory,
+    "--command", "UPDATE exposure_paths SET data_json = json_set(data_json, '$.evidence[0]', 'Authorization: Bearer test-secret-token-value') WHERE id = 'northstar-labs:CP-1024'",
+  ], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "fixture.log") },
+    encoding: "utf8",
+  });
+  assert.equal(fixture.status, 0, `${fixture.stdout ?? ""}\n${fixture.stderr ?? ""}`);
+  await startServer();
 });
 
 after(async () => {
-  if (server && !server.killed) {
-    server.kill("SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => server.once("exit", resolve)),
-      new Promise((resolve) => setTimeout(resolve, 1_000)),
-    ]);
-  }
+  await stopServer();
   if (stateDirectory) await rm(stateDirectory, { recursive: true, force: true });
 });
 
@@ -289,9 +297,10 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(discoveryBody.status, "Runner required");
   assert.equal(discoveryBody.scope.executable, false);
 
-  // Miniflare can drop its local D1 connection when distinct batch mutations
-  // are issued in the same event-loop turn on constrained CI runners.
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  // Verify the persisted connector and isolate Miniflare's local D1 lifecycle
+  // before exercising a second connector batch mutation.
+  await stopServer();
+  await startServer();
 
   const rotatedExternalId = "cpv1_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg";
   const rotation = await request(`${origin}/api/connectors/${created.id}/external-id`, {
