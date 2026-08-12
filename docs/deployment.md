@@ -33,6 +33,8 @@ There is no supported self-hosted public deployment and no production AWS runner
 | `CLOUDPEN_SIGNING_PUBLIC_JWK` | Production | No | Independently retrieved public RSA JWK; contains no private material |
 | `CLOUDPEN_SIEM_URL` | Production | No | Exact independently administered HTTPS endpoint ending `/v1/events` |
 | `CLOUDPEN_SIEM_TOKEN` | Production | Yes | High-entropy SIEM delivery bearer credential, minimum 32 characters |
+
+The repository includes deployable AWS reference boundaries under `infra/aws-kms-signer` and `infra/aws-siem-collector`. The SIEM archive uses 90-day S3 Object Lock `COMPLIANCE` retention; select the account and retention commitment deliberately before deployment.
 | `PUBLIC_APP_ORIGIN` | Hosted | No | Exact canonical HTTPS origin, with no path or credentials |
 | `CLOUDPEN_LOCAL_DEV_EMAIL` | Local only | No | Optional development identity override |
 | `CLOUDPEN_LOCAL_MODE` | Local launcher only | No | Enables loopback-only development identity and local ephemeral asymmetric signing |

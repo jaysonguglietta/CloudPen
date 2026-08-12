@@ -9,3 +9,5 @@ Delivery failures enter `security_event_outbox`. Successful future deliveries op
 The independent collector must validate TLS, bearer credential, content type, schema allowlist, event ID uniqueness, timestamp skew, and body digest; rate-limit safely; store events immutably under separate administration; and alert on authorization, cross-origin, body-size, rate-limit, internal, identity-origin, audit-verification, signer, local-mode, and delivery-backlog signals. Never enable body capture at an upstream proxy.
 
 Production acceptance evidence includes a synthetic allowed request, each denial class, simulated collector outage, queued event, successful retry, duplicate handling, alert receipt, token rotation, and retention/legal-hold behavior.
+
+The deployable reference receiver in `infra/aws-siem-collector` implements this contract with a generated Secrets Manager token, a throttled HTTP API, strict schema/digest validation, S3 event-ID deduplication, and a private S3 Object Lock `COMPLIANCE` archive. Deploy it under a security-operations administration boundary; CloudPen receives only its write credential and has no archive read or delete capability.

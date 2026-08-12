@@ -71,6 +71,8 @@ The production Sites runtime must provide:
 - `CLOUDPEN_PRODUCTION_MODE=1`
 - `CLOUDPEN_SIGNER_URL`, secret `CLOUDPEN_SIGNER_TOKEN`, `CLOUDPEN_SIGNING_KEY_ID`, and pinned `CLOUDPEN_SIGNING_PUBLIC_JWK`
 - `CLOUDPEN_SIEM_URL` and secret `CLOUDPEN_SIEM_TOKEN`
+
+Production reference infrastructure is provided for the KMS signing boundary (`infra/aws-kms-signer`) and the immutable security-event receiving boundary (`infra/aws-siem-collector`).
 - `PUBLIC_APP_ORIGIN` as the canonical HTTPS origin
 - D1 binding `DB`
 
