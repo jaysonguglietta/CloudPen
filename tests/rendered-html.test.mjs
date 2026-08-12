@@ -17,6 +17,16 @@ let server;
 let output = "";
 let stateDirectory;
 
+async function request(input, init) {
+  const response = await globalThis.fetch(input, init);
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 describe("CloudPen built Worker", { concurrency: false }, () => {
 before(async () => {
   stateDirectory = await mkdtemp(join(tmpdir(), "cloudpen-security-tests-"));
@@ -66,7 +76,7 @@ before(async () => {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${origin}/access-denied`);
+      const response = await request(`${origin}/access-denied`);
       if (response.status === 200) return;
     } catch {
       // Server is still starting.
@@ -88,14 +98,14 @@ after(async () => {
 });
 
 async function render(extraHeaders = {}) {
-  return fetch(`${origin}/`, {
+  return request(`${origin}/`, {
     headers: { accept: "text/html", ...identityHeaders, ...extraHeaders },
     redirect: "manual",
   });
 }
 
 test("requires identity and application membership", async () => {
-  const response = await fetch(`${origin}/`, { redirect: "manual" });
+  const response = await request(`${origin}/`, { redirect: "manual" });
   assert.equal(response.status, 307);
   const location = new URL(response.headers.get("location") ?? "", origin);
   assert.equal(location.pathname, "/signin-with-chatgpt");
@@ -151,7 +161,7 @@ test("uses the configured origin for social metadata", async () => {
 });
 
 test("rejects identity headers delivered on an alternate origin", async () => {
-  const response = await fetch(`http://localhost:${port}/`, {
+  const response = await request(`http://localhost:${port}/`, {
     headers: { accept: "text/html", ...identityHeaders },
     redirect: "manual",
   });
@@ -159,7 +169,7 @@ test("rejects identity headers delivered on an alternate origin", async () => {
 });
 
 test("rejects cross-origin mutations before business logic", async () => {
-  const response = await fetch(`${origin}/api/validation-runs`, {
+  const response = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin: "https://attacker.example" },
   });
@@ -180,7 +190,7 @@ test("bounds streamed request bodies without retaining bytes over the limit", as
 });
 
 test("creates a durable signed non-executable plan", async () => {
-  const response = await fetch(`${origin}/api/validation-runs`, {
+  const response = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
@@ -197,7 +207,7 @@ test("creates a durable signed non-executable plan", async () => {
 });
 
 test("holds active canary plans for separate approval", async () => {
-  const response = await fetch(`${origin}/api/validation-runs`, {
+  const response = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ attackPathId: "CP-1037", mode: "Active canary", acknowledged: true }),
@@ -209,7 +219,7 @@ test("holds active canary plans for separate approval", async () => {
 });
 
 test("does not allow core safety guardrails to be disabled", async () => {
-  const response = await fetch(`${origin}/api/guardrails`, {
+  const response = await request(`${origin}/api/guardrails`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ canaryOnly: false }),
@@ -219,7 +229,7 @@ test("does not allow core safety guardrails to be disabled", async () => {
 });
 
 test("enforces application roles independently of identity", async () => {
-  const response = await fetch(`${origin}/api/validation-runs`, {
+  const response = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: {
       ...identityHeaders,
@@ -232,7 +242,7 @@ test("enforces application roles independently of identity", async () => {
 });
 
 test("returns explicit demo provenance and authoritative empty workflow records", async () => {
-  const response = await fetch(`${origin}/api/control-plane`, { headers: identityHeaders });
+  const response = await request(`${origin}/api/control-plane`, { headers: identityHeaders });
   assert.equal(response.status, 200);
   const body = await response.json();
   assert.equal(body.workspace.dataMode, "demo");
@@ -243,7 +253,7 @@ test("returns explicit demo provenance and authoritative empty workflow records"
 });
 
 test("persists connector records without returning the raw external ID", async () => {
-  const weak = await fetch(`${origin}/api/connectors`, {
+  const weak = await request(`${origin}/api/connectors`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ name: "Weak connector", accountId: "111111111111", externalId: "predictable-external-id" }),
@@ -251,7 +261,7 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(weak.status, 400);
 
   const externalId = "cpv1_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
-  const response = await fetch(`${origin}/api/connectors`, {
+  const response = await request(`${origin}/api/connectors`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ name: "Payments Production", accountId: "123456789012", externalId }),
@@ -262,14 +272,14 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(created.status, "Runner required");
   assert.match(created.id, /^CON-[A-Z0-9]{8}$/);
 
-  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  const snapshot = await (await request(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
   assert.equal(snapshot.connectors.length, 1);
   assert.equal(snapshot.connectors[0].accountId, "123456789012");
   assert.equal(snapshot.connectors[0].externalIdStatus, "not-retained");
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(externalId));
   assert.doesNotMatch(JSON.stringify(snapshot.audit), /externalIdDigest|external_id_digest/i);
 
-  const discovery = await fetch(`${origin}/api/connectors/${created.id}/discovery`, {
+  const discovery = await request(`${origin}/api/connectors/${created.id}/discovery`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: "{}",
@@ -280,20 +290,20 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(discoveryBody.scope.executable, false);
 
   const rotatedExternalId = "cpv1_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg";
-  const rotation = await fetch(`${origin}/api/connectors/${created.id}/external-id`, {
+  const rotation = await request(`${origin}/api/connectors/${created.id}/external-id`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ externalId: rotatedExternalId }),
   });
   const rotationBody = await rotation.text();
   assert.equal(rotation.status, 200, `${rotationBody}\n${output}`);
-  const afterRotation = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).text();
+  const afterRotation = await (await request(`${origin}/api/control-plane`, { headers: identityHeaders })).text();
   assert.doesNotMatch(afterRotation, new RegExp(rotatedExternalId));
   assert.doesNotMatch(afterRotation, /externalIdDigest|external_id_digest/i);
 });
 
 test("enforces separation of duties for active-plan approval", async () => {
-  const create = await fetch(`${origin}/api/validation-runs`, {
+  const create = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ attackPathId: "CP-1037", mode: "Active canary", acknowledged: true }),
@@ -301,7 +311,7 @@ test("enforces separation of duties for active-plan approval", async () => {
   const created = await create.json();
   assert.equal(create.status, 201);
 
-  const selfApproval = await fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+  const selfApproval = await request(`${origin}/api/validation-runs/${created.run.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ decision: "approve", reason: "Authorized integration validation" }),
@@ -309,7 +319,7 @@ test("enforces separation of duties for active-plan approval", async () => {
   assert.equal(selfApproval.status, 400);
 
   const reviewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "reviewer@example.com" };
-  const approval = await fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+  const approval = await request(`${origin}/api/validation-runs/${created.run.id}`, {
     method: "PATCH",
     headers: { ...reviewerHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ decision: "approve", reason: "Scope and canary controls reviewed" }),
@@ -320,7 +330,7 @@ test("enforces separation of duties for active-plan approval", async () => {
 });
 
 test("commits only one concurrent validation decision", async () => {
-  const create = await fetch(`${origin}/api/validation-runs`, {
+  const create = await request(`${origin}/api/validation-runs`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ attackPathId: "CP-1037", mode: "Active canary", acknowledged: true }),
@@ -335,11 +345,11 @@ test("commits only one concurrent validation decision", async () => {
     origin,
   };
   const [approve, reject] = await Promise.all([
-    fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+    request(`${origin}/api/validation-runs/${created.run.id}`, {
       method: "PATCH", headers: reviewerHeaders,
       body: JSON.stringify({ decision: "approve", reason: "Concurrent approval attempt" }),
     }),
-    fetch(`${origin}/api/validation-runs/${created.run.id}`, {
+    request(`${origin}/api/validation-runs/${created.run.id}`, {
       method: "PATCH", headers: reviewerHeaders,
       body: JSON.stringify({ decision: "reject", reason: "Concurrent rejection attempt" }),
     }),
@@ -348,7 +358,7 @@ test("commits only one concurrent validation decision", async () => {
 });
 
 test("creates retained evidence manifests and tracked remediation", async () => {
-  const evidence = await fetch(`${origin}/api/evidence/CP-1042`, {
+  const evidence = await request(`${origin}/api/evidence/CP-1042`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: "{}",
@@ -359,7 +369,7 @@ test("creates retained evidence manifests and tracked remediation", async () => 
   assert.equal(evidenceBody.payload.redaction.applied, true);
 
   const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
-  const remediation = await fetch(`${origin}/api/remediations`, {
+  const remediation = await request(`${origin}/api/remediations`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ pathId: "CP-1042", owner: "Platform Security", dueAt }),
@@ -368,35 +378,35 @@ test("creates retained evidence manifests and tracked remediation", async () => 
   assert.equal(remediation.status, 201);
   assert.equal(remediationBody.remediation.status, "Open");
 
-  const update = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+  const update = await request(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "In progress", version: 1, reason: "Implementation work has started" }),
   });
   assert.equal(update.status, 200);
 
-  const invalidTransition = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+  const invalidTransition = await request(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Closed", version: 2, reason: "Attempted premature closure", revalidationEvidenceId: evidenceBody.packageId }),
   });
   assert.equal(invalidTransition.status, 409);
 
-  const ready = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+  const ready = await request(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Ready to revalidate", version: 2, reason: "The permission boundary fix is deployed" }),
   });
   assert.equal(ready.status, 200);
 
-  const close = await fetch(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
+  const close = await request(`${origin}/api/remediations/${remediationBody.remediation.id}`, {
     method: "PATCH",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Closed", version: 3, reason: "Signed revalidation evidence confirms the path is fixed", revalidationEvidenceId: evidenceBody.packageId }),
   });
   assert.equal(close.status, 200);
 
-  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  const snapshot = await (await request(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
   assert.equal(snapshot.auditChainValid, true);
   assert.ok(snapshot.evidence.some((item) => item.id === evidenceBody.packageId));
   assert.ok(snapshot.remediations.some((item) => item.id === remediationBody.remediation.id && item.status === "Closed" && item.version === 4));
@@ -405,7 +415,7 @@ test("creates retained evidence manifests and tracked remediation", async () => 
 test("reserves risk acceptance for administrators and rejects stale remediation versions", async () => {
   const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
   const operatorHeaders = { ...identityHeaders, "oai-authenticated-user-email": "operator@example.com" };
-  const create = await fetch(`${origin}/api/remediations`, {
+  const create = await request(`${origin}/api/remediations`, {
     method: "POST",
     headers: { ...operatorHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ pathId: "CP-1037", owner: "Identity Security", dueAt }),
@@ -413,7 +423,7 @@ test("reserves risk acceptance for administrators and rejects stale remediation 
   const created = await create.json();
   assert.equal(create.status, 201);
   const expiry = new Date(Date.now() + 30 * 86_400_000).toISOString();
-  const operatorAcceptance = await fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+  const operatorAcceptance = await request(`${origin}/api/remediations/${created.remediation.id}`, {
     method: "PATCH",
     headers: { ...operatorHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance pending vendor trust redesign", riskAcceptanceExpiresAt: expiry }),
@@ -421,12 +431,12 @@ test("reserves risk acceptance for administrators and rejects stale remediation 
   assert.equal(operatorAcceptance.status, 403);
 
   const [start, accept] = await Promise.all([
-    fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+    request(`${origin}/api/remediations/${created.remediation.id}`, {
       method: "PATCH",
       headers: { ...identityHeaders, "content-type": "application/json", origin },
       body: JSON.stringify({ status: "In progress", version: 1, reason: "Identity team began implementation" }),
     }),
-    fetch(`${origin}/api/remediations/${created.remediation.id}`, {
+    request(`${origin}/api/remediations/${created.remediation.id}`, {
       method: "PATCH",
       headers: { ...identityHeaders, "content-type": "application/json", origin },
       body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance pending vendor trust redesign", riskAcceptanceExpiresAt: expiry }),
@@ -441,30 +451,30 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
   const reviewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "reviewer@example.com" };
   const viewerHeaders = { ...identityHeaders, "oai-authenticated-user-email": "viewer@example.com" };
 
-  const riskCreate = await fetch(`${origin}/api/remediations`, {
+  const riskCreate = await request(`${origin}/api/remediations`, {
     method: "POST", headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ pathId: "CP-1031", owner: "Platform Security", dueAt }),
   });
   const riskRecord = await riskCreate.json();
   assert.equal(riskCreate.status, 201);
   const expiry = new Date(Date.now() + 30 * 86_400_000).toISOString();
-  const viewerRisk = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+  const viewerRisk = await request(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
     method: "PATCH", headers: { ...viewerHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Viewer attempted unauthorized risk acceptance", riskAcceptanceExpiresAt: expiry }),
   });
   assert.equal(viewerRisk.status, 403);
-  const adminRisk = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+  const adminRisk = await request(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
     method: "PATCH", headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Risk accepted", version: 1, reason: "Temporary acceptance while the service control is redesigned", riskAcceptanceExpiresAt: expiry }),
   });
   assert.equal(adminRisk.status, 200);
-  const resume = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+  const resume = await request(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
     method: "PATCH", headers: { ...operatorHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "In progress", version: 2, reason: "Engineering resumed the remediation work" }),
   });
   assert.equal(resume.status, 200);
 
-  const closeCreate = await fetch(`${origin}/api/remediations`, {
+  const closeCreate = await request(`${origin}/api/remediations`, {
     method: "POST", headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ pathId: "CP-1024", owner: "Data Platform", dueAt }),
   });
@@ -474,18 +484,18 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
     ["In progress", 1, "The data platform team started the policy correction"],
     ["Ready to revalidate", 2, "The corrected resource policy is deployed for validation"],
   ]) {
-    const transition = await fetch(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
+    const transition = await request(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
       method: "PATCH", headers: { ...operatorHeaders, "content-type": "application/json", origin },
       body: JSON.stringify({ status, version, reason }),
     });
     assert.equal(transition.status, 200);
   }
-  const reviewerOrdinaryUpdate = await fetch(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
+  const reviewerOrdinaryUpdate = await request(`${origin}/api/remediations/${riskRecord.remediation.id}`, {
     method: "PATCH", headers: { ...reviewerHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Ready to revalidate", version: 3, reason: "Reviewer attempted an operator transition" }),
   });
   assert.equal(reviewerOrdinaryUpdate.status, 403);
-  const evidence = await fetch(`${origin}/api/evidence/CP-1024`, {
+  const evidence = await request(`${origin}/api/evidence/CP-1024`, {
     method: "POST", headers: { ...reviewerHeaders, "content-type": "application/json", origin }, body: "{}",
   });
   const evidenceBody = await evidence.json();
@@ -493,7 +503,7 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
   assert.equal(evidenceBody.payload.redaction.redactedValues, 1);
   assert.doesNotMatch(JSON.stringify(evidenceBody), /test-secret-token-value/);
   assert.match(JSON.stringify(evidenceBody), /REDACTED_TOKEN/);
-  const reviewerClose = await fetch(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
+  const reviewerClose = await request(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
     method: "PATCH", headers: { ...reviewerHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Closed", version: 3, reason: "Independent signed revalidation confirms the path is mitigated", revalidationEvidenceId: evidenceBody.packageId }),
   });
@@ -501,7 +511,7 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
 });
 
 test("exports a signed guardrail policy that remains non-executable", async () => {
-  const response = await fetch(`${origin}/api/guardrails/export`, { headers: identityHeaders });
+  const response = await request(`${origin}/api/guardrails/export`, { headers: identityHeaders });
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.payload.executable, false);
@@ -510,7 +520,7 @@ test("exports a signed guardrail policy that remains non-executable", async () =
 });
 
 test("stages runner enrollment without creating an execution capability", async () => {
-  const response = await fetch(`${origin}/api/runners`, {
+  const response = await request(`${origin}/api/runners`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ name: "Production security runner", publicKeyFingerprint: "a".repeat(64) }),
@@ -520,12 +530,12 @@ test("stages runner enrollment without creating an execution capability", async 
   assert.equal(body.runner.status, "Pending");
   assert.equal(body.runner.executable, false);
 
-  const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
+  const snapshot = await (await request(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
   assert.ok(snapshot.runners.some((runner) => runner.id === body.runner.id && runner.executable === false));
 });
 
 test("exports a signed assessment with provenance and no execution authority", async () => {
-  const response = await fetch(`${origin}/api/reports/export`, {
+  const response = await request(`${origin}/api/reports/export`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: "{}",
@@ -541,7 +551,7 @@ test("exports a signed assessment with provenance and no execution authority", a
 
 test("emits correlated structured telemetry without request bodies or secrets", async () => {
   const marker = "log-injection-marker\\nforged-event";
-  const response = await fetch(`${origin}/api/connectors`, {
+  const response = await request(`${origin}/api/connectors`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ name: marker, accountId: "not-an-account", externalId: "not-a-secret" }),
