@@ -2,6 +2,25 @@
 
 All notable changes are documented here. CloudPen has not reached a stable public release.
 
+## 0.2.0-rc.4 — 2026-08-12
+
+> Synthetic/private evaluation prerelease. CloudPen remains non-executable and is not approved for production tenants, real customer data, or active cloud testing.
+
+### Changed
+
+- Added a separately verifiable SLSA build-provenance attestation alongside the CycloneDX SBOM attestation and retained both Sigstore bundles with the release evidence.
+- Upgraded the pinned checkout, Node setup, and artifact-upload actions to Node.js 24-compatible releases.
+- Converted losing optimistic remediation updates into explicit `409 Conflict` responses while preserving atomic mutation/audit rollback.
+
+### Security
+
+- Protected build/security and CodeQL checks pass on the release source, and production dependency auditing reports zero vulnerabilities.
+- The release workflow rejects self-hosted provenance and binds both attestations to the exact source digest and trusted workflow identity.
+
+### Release status
+
+- Source, CI, SAST, SBOM, and build-provenance gates are complete for this evaluation release. Production promotion remains blocked until external KMS/SIEM provisioning and evidence, direct-origin retesting of the deployed Sites version, a platform recovery drill, and independent assessment are complete.
+
 ## 0.2.0-rc.3 — 2026-08-12
 
 ### Added
