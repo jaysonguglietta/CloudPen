@@ -16,6 +16,10 @@ This document tracks the implementation sequence without confusing administrativ
 - Signed assessment and guardrail exports.
 - Pending runner-enrollment records pinned to a SHA-256 public-key fingerprint.
 - Database constraints forcing discovery jobs and runner enrollments to remain non-executable.
+- Versioned KMS-compatible PS256 signing, signed approvals/audit anchors/backup manifests, and an independent pinned-key verifier.
+- Membership-derived workspace isolation with two-tenant adversarial tests.
+- Direct SIEM delivery with durable failure outbox, legal holds, lifecycle maintenance, and signed logical backup.
+- Tagged-release SBOM and build provenance attestation workflow.
 
 ## Partially delivered foundations
 
@@ -25,11 +29,11 @@ The schema, connector lifecycle, service allowlist, and discovery-plan envelope 
 
 ### Tenant isolation
 
-All product records and queries carry the configured `workspace_id`; request bodies cannot choose a tenant. The current hosted/local deployment exposes one organization. Self-service workspace creation, switching, invitations, SCIM, tenant-specific keys, and automated cross-tenant negative testing remain launch gates before a multi-customer service.
+All product records and queries carry membership-derived `workspace_id`; request bodies cannot choose a tenant, and automated tests exercise two workspaces. Self-service workspace creation/switching, invitations, SCIM, access certification, and tenant-specific signing keys remain launch gates for broad multi-customer service.
 
 ### Reporting and integrations
 
-Signed JSON assessment export is available. PDF generation, Jira/GitHub routing, SIEM delivery, webhooks, SLA notifications, and scheduled revalidation remain outside the current outbound-network boundary.
+Signed JSON assessment export and direct SIEM delivery are available. PDF generation, Jira/GitHub routing, general webhooks, SLA notifications, and scheduled revalidation remain outside the current boundary.
 
 ### AI analyst
 
@@ -37,6 +41,6 @@ No model is connected. A future advisory assistant may explain paths, compare sn
 
 ## Execution launch gates
 
-Active cloud validation remains disabled until every mandatory control in `runner-security-design.md` is implemented and independently tested. A pending enrollment fingerprint is not runner identity, an approved plan is not execution authority, and an HMAC envelope is not suitable for independent runner verification.
+Active cloud validation remains disabled until every mandatory control in `runner-security-design.md` is implemented and independently tested. A pending enrollment fingerprint is not runner identity, and a correctly signed approved plan is still not execution authority without runner binding, atomic nonce consumption, module policy, workload identity, kill switch, and cleanup proof.
 
-The next safe engineering milestone is the customer-hosted read-only AWS collector. Active-canary execution follows only after asymmetric signing, single-use delivery, module allowlisting, independent policy verification, customer kill switch, cleanup proof, and evidence attestation are complete.
+The next safe engineering milestone is the customer-hosted read-only AWS collector. Active-canary execution follows only after single-use delivery, runner/account binding, module allowlisting, independent policy verification, customer kill switch, cleanup proof, evidence attestation, and independent assessment are complete.

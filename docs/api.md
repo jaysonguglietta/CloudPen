@@ -90,10 +90,11 @@ Response excerpt:
     "duration": "Not executed"
   },
   "receipt": {
-    "algorithm": "HMAC-SHA-256",
-    "keyId": "cloudpen-plan-v1",
+    "algorithm": "PS256",
+    "keyId": "arn:aws:kms:region:account:key/version",
     "authorizationDigest": "base64url-sha256",
-    "signature": "base64url-hmac",
+    "signature": "base64url-rsa-pss",
+    "envelope": { "schema": "cloudpen.signed-artifact.v2", "protocolVersion": 2 },
     "executable": false
   }
 }
@@ -181,7 +182,7 @@ Generates a redacted signed evidence package for a known synthetic path.
 - Disposition: attachment
 - Caching: disabled
 
-The response contains a `payload` and an `integrity` envelope with SHA-256 digest and HMAC-SHA-256 signature. Credentials, tokens, customer payloads, and raw cloud responses are not part of the package.
+The response contains a `payload` and a versioned PS256 `integrity` envelope. Credentials, tokens, customer payloads, and raw cloud responses are not part of the package. Independent verifiers must pin the public key outside the artifact channel.
 
 The export also creates a retained evidence-manifest row containing package ID, path, classification, digest, key ID, actor, and timestamp. The package body is not retained in D1.
 
@@ -195,9 +196,13 @@ The export also creates a retained evidence-manifest row containing package ID, 
 | `PATCH /api/remediations/{id}` | `plan` | Moves remediation through the supported workflow states |
 | `POST /api/connectors/{id}/discovery` | `connect` | Records a bounded AWS metadata-read-only discovery plan with `executable: false` |
 | `POST /api/connectors/{id}/external-id` | `connect` | Validates a newly generated one-time External ID, records rotation, returns the connector to `Runner required`, and retains no value or digest |
-| `GET /api/guardrails/export` | `read` | Downloads a signed, non-executable policy envelope |
+| `POST /api/guardrails/export` | `read` | Same-origin JSON `{}`; downloads a signed, non-executable policy envelope |
 | `POST /api/reports/export` | `read` | Downloads a signed assessment derived from current exposure and workflow state; requires same-origin JSON `{}` |
 | `POST /api/runners` | `enroll` (admin) | Pins a public-key fingerprint in `Pending` state with database-enforced `executable = 0` |
+| `GET /api/admin/readiness` | `configure` (admin) | Returns `200` only when all production signer, SIEM, database, origin, and mode gates pass; otherwise `503` |
+| `POST /api/admin/audit-anchor` | `configure` (admin) | Verifies the full audit chain and creates a linked PS256-signed chain-head anchor |
+| `POST /api/admin/backup` | `configure` (admin) | Returns a bounded logical workspace archive plus signed manifest; no secrets or private keys |
+| `GET/POST /api/admin/lifecycle` | `configure` (admin) | Reports retention/backlog/anchor status; runs bounded maintenance; creates or releases reasoned legal holds |
 
 Remediation transitions are server-governed: `Open` may move to `In progress` or `Risk accepted`; `In progress` may move to `Risk accepted` or `Ready to revalidate`; `Risk accepted` may return to `In progress`; and `Ready to revalidate` may return to `In progress` or close. `Closed` is terminal. Every request supplies the current integer `version` and an 8–500 character `reason`; concurrent stale transitions return `409`.
 

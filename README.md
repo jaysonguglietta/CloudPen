@@ -23,7 +23,7 @@ The trust boundary is split into three layers:
 2. CloudPen maps the verified email to an explicit `admin`, `operator`, `reviewer`, or `viewer` role and enforces capabilities again in every API route.
 3. D1 owns exposure snapshots, connectors, plans, approvals, evidence manifests, remediation, pending runner enrollment, guardrails, rate limits, and a hash-chained audit log. The browser is only a presentation client.
 
-Mutation endpoints require same-origin requests, validate fields, apply per-user rate limits, and return sanitized errors. JSON bodies are limited to 8 KiB. Evidence exports and plans use HMAC-SHA-256 integrity envelopes. Production safety controls cannot be disabled.
+Mutation endpoints require same-origin requests, validate fields, apply per-user rate limits, and return sanitized errors. JSON bodies are limited to 8 KiB. Evidence, plans, approvals, policies, reports, audit anchors, and backup manifests use versioned PS256 integrity envelopes. Production safety controls cannot be disabled.
 
 See [SECURITY.md](./SECURITY.md) for the implemented boundary and prerequisites for a future AWS runner.
 
@@ -38,6 +38,8 @@ See [SECURITY.md](./SECURITY.md) for the implemented boundary and prerequisites 
 - [Runner security design](./docs/runner-security-design.md)
 - [Feature delivery status](./docs/feature-roadmap.md)
 - [Testing and release gates](./docs/testing-and-release.md)
+- [Production hardening status](./docs/production-hardening.md)
+- [Signed artifact protocol](./docs/cryptographic-protocol.md)
 - [Contributing](./CONTRIBUTING.md)
 - [Changelog](./CHANGELOG.md)
 
@@ -63,14 +65,16 @@ Copy `.env.example` to an ignored local environment file if you need to customiz
 
 ## Production environment
 
-The Sites runtime must provide:
+The production Sites runtime must provide:
 
 - `CLOUDPEN_ADMIN_EMAILS` and optional operator/reviewer/viewer lists
-- `CLOUDPEN_PLAN_SIGNING_KEY` as a unique secret with at least 32 characters
+- `CLOUDPEN_PRODUCTION_MODE=1`
+- `CLOUDPEN_SIGNER_URL`, secret `CLOUDPEN_SIGNER_TOKEN`, `CLOUDPEN_SIGNING_KEY_ID`, and pinned `CLOUDPEN_SIGNING_PUBLIC_JWK`
+- `CLOUDPEN_SIEM_URL` and secret `CLOUDPEN_SIEM_TOKEN`
 - `PUBLIC_APP_ORIGIN` as the canonical HTTPS origin
 - D1 binding `DB`
 
-Keep Sites access in private/custom mode. A user must pass both the Sites access policy and application role checks.
+Keep Sites access in private/custom mode. A user must pass both the Sites access policy and application role checks. `/api/admin/readiness` returns `503` until every mandatory production binding is valid.
 
 ## Verification
 
@@ -84,7 +88,7 @@ npm run security:audit
 
 Use `npm run security:audit:all` to include build-only dependencies; tracked exceptions and reachability are documented in the security review.
 
-`npm test` builds from a clean output directory, starts the Worker with temporary loopback D1 state, and exercises authentication, security headers, CSRF rejection, plan signing, approval separation, connector secret handling, non-executable discovery, evidence retention, remediation state, runner staging, reporting, and audit integrity. CI runs the same gates. `npm run sbom` creates an ignored CycloneDX SBOM for a release artifact.
+`npm test` builds from a clean output directory, starts the Worker with temporary loopback D1 state, and exercises authentication, security headers, CSRF rejection, asymmetric signing and adversarial verification, approval separation, two-tenant isolation, connector secret handling, evidence retention, legal holds, logical backup, audit anchors, remediation, runner staging, reporting, and telemetry. CI runs the same gates. `npm run sbom` creates an ignored CycloneDX SBOM for a release artifact.
 
 ## Project status
 
@@ -94,7 +98,8 @@ CloudPen is a pre-production security control-plane prototype. It is suitable fo
 
 - The current D1 exposure snapshot is explicitly labeled demo data. The schema supports future read-only snapshot ingestion, but no AWS collector is enrolled.
 - Runner enrollment is a fingerprint-pinning review record only. There is no delivery channel, AWS credential exchange, module execution, or active validation.
-- There is no KMS asymmetric signing, SCIM administration, SIEM delivery, PDF renderer, or external penetration-test attestation yet.
-- Workspace data is consistently scoped by `workspace_id`, but the current deployment exposes one configured organization and has no self-service tenant lifecycle.
-- HMAC proves server possession of a shared secret; production evidence should move to KMS-backed asymmetric signatures before third-party verification.
-- The CSP permits inline framework bootstrap code. A nonce-based CSP is the next browser-hardening step.
+- The KMS signer and SIEM delivery paths are implemented and fail-closed, but they are not operational until provisioned in the approved external accounts and evidenced by post-deployment tests.
+- Workspace data is consistently membership-scoped and tested across two tenants, but self-service tenant lifecycle, invitations, SCIM, and periodic access certification are not implemented.
+- Logical signed backup exists; an encrypted platform backup/restore drill and measured recovery objectives remain operational gates.
+- The CSP nonces every script and blocks script attributes; inline styles remain allowed for framework compatibility.
+- Independent assessment and the customer-hosted runner program remain mandatory before real cloud execution.

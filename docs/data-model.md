@@ -17,6 +17,10 @@ erDiagram
   EXPOSURE_SNAPSHOTS ||--o{ EXPOSURE_PATHS : computes
   EXPOSURE_SNAPSHOTS ||--o{ GRAPH_EDGES : connects
   WORKSPACES ||--o{ AUDIT_EVENTS : records
+  WORKSPACES ||--o{ APPROVAL_ENVELOPES : authorizes
+  WORKSPACES ||--o{ AUDIT_ANCHORS : anchors
+  WORKSPACES ||--o{ LEGAL_HOLDS : preserves
+  SIGNING_KEYS ||--o{ APPROVAL_ENVELOPES : verifies
 
   WORKSPACES {
     text id PK
@@ -52,6 +56,12 @@ erDiagram
     text approved_by
     text authorization_digest
     text plan_signature
+    text plan_payload_json
+    text plan_envelope_json
+    text plan_key_id
+    text plan_algorithm
+    text approval_id
+    integer version
     text expires_at
     text decision_reason
     integer findings
@@ -84,7 +94,7 @@ Contains the configured organization and an explicit `demo` or `live` provenance
 
 ### `memberships`
 
-Records users observed after successful environment-allowlist authorization. The environment allowlist remains the authorization source in this release; a membership row alone does not grant access.
+Records explicit email/workspace role assignments. Authenticated identity plus a matching membership derives tenant context; a request cannot select another workspace. Environment allowlists remain a controlled fallback only when the identity has no membership and does not request a workspace.
 
 Roles:
 
@@ -99,7 +109,7 @@ Stores mandatory execution-policy values. The current API rejects any attempt to
 
 ### `validation_runs`
 
-Stores server-issued plans and integrity data. Control-plane transitions include `Planned`, `Awaiting approval`, `Approved`, `Rejected`, `Expired`, and `Stopped`. Approval requires a distinct identity and still grants no execution capability.
+Stores server-issued plans, canonical payload, versioned envelope, PS256 signature, key ID, expiry, and optimistic-concurrency version. Control-plane transitions include `Planned`, `Awaiting approval`, `Approved`, `Rejected`, `Expired`, and `Stopped`. The signature is reverified before a decision; approval requires a distinct identity and still grants no execution capability. `approval_envelopes` stores the separate signed decision bound to the plan digest.
 
 ### Connector and workflow tables
 
@@ -119,11 +129,20 @@ The current snapshot is a deterministic `demo-seed`. These tables are the ingest
 
 ### `audit_events`
 
-Stores application-append-only events. Each event hashes its canonical content and the previous event hash. A unique `(workspace_id, previous_hash)` index prevents two successors from silently branching the same chain link. The chain is tamper-evident, not immutable against a database administrator; external anchoring is a future requirement.
+Stores application-append-only events. Each event hashes its canonical content and the previous event hash. A unique `(workspace_id, previous_hash)` index prevents two successors from silently branching the same chain link. `audit_anchors` stores PS256-signed linked chain heads for independent export. D1 remains tamper-evident, not immutable against an administrator.
 
 ### `rate_limits`
 
-Stores per-identity counters and Unix expiry timestamps. Keys include the operation class and normalized email. Expired rows may be overwritten; scheduled garbage collection is not yet implemented.
+Stores per-identity counters and Unix expiry timestamps. Keys include workspace, operation class, and normalized email. Bounded lifecycle maintenance purges expired rows.
+
+### Signing, lifecycle, and delivery tables
+
+- `signing_keys` is the public-key registry with active/retired/revoked state and validity windows; private keys are never stored.
+- `consumed_artifact_nonces` is the durable replay boundary reserved for a future independently assessed runner.
+- `audit_anchors` stores signed chain heads linked through the preceding anchor digest.
+- `legal_holds` records accountable creation and release without deleting history.
+- `security_event_outbox` stores canonical event JSON, digest, attempts, backoff, delivery state, and sanitized failure class when SIEM delivery fails.
+- `atomic_guards` is a constraint sentinel used inside D1 batches so a security mutation without exactly one audit insert rolls back.
 
 ## Mutation and audit atomicity
 
@@ -136,11 +155,12 @@ Security-relevant state changes and their hash-chained audit rows commit in one 
 | User email and display name | Internal personal data | Server-derived; email persisted for attribution |
 | AWS account ID in connector audit | Confidential tenant metadata | Accepted only after validation; stored in audit details |
 | External ID | Confidential confused-deputy context | Browser-generated from 256 random bits; validated then discarded with no raw value, hint, or digest logged |
-| Signing key | Secret | Environment secret only; never stored in D1 or returned |
-| Plan digest and HMAC | Integrity metadata | Stored and returned in plan receipt |
+| Signing private key | Secret | Non-exportable external KMS key; never enters Sites or D1 |
+| Public JWK/key status | Public integrity metadata | Stored in `signing_keys` and included in controlled backup exports |
+| Plan digest and PS256 signature | Integrity metadata | Payload/envelope/signature stored and reverified before approval |
 | Evidence observations | Synthetic confidential sample | Returned in a signed, non-cacheable download |
 | Cloud topology | Synthetic sample | Seeded into D1 and server-delivered with explicit demo provenance |
 
 ## Retention
 
-Automated retention is not implemented. Before accepting real personal or tenant data, define per-table retention, legal hold, deletion, export, backup, and restoration procedures. Rate-limit rows should have periodic expiry cleanup; audit and plan retention should be driven by security and compliance requirements rather than indefinite storage by default.
+`legal_holds` records active/released holds. `security_event_outbox` durably retains failed SIEM deliveries. Lifecycle maintenance removes expired rate counters and confirmed-delivered outbox metadata after seven days unless held. Signed logical backup manifests bind archive digest and row counts. Customer-record deletion and platform restoration remain approved operator procedures described in `data-lifecycle.md`.

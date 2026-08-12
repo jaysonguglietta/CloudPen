@@ -43,11 +43,50 @@ export const validationRuns = sqliteTable("validation_runs", {
   approvedBy: text("approved_by"),
   authorizationDigest: text("authorization_digest").notNull(),
   planSignature: text("plan_signature").notNull(),
+  planPayloadJson: text("plan_payload_json"),
+  planEnvelopeJson: text("plan_envelope_json"),
+  planKeyId: text("plan_key_id"),
+  planAlgorithm: text("plan_algorithm"),
+  approvalId: text("approval_id"),
+  version: integer("version").notNull().default(1),
   expiresAt: text("expires_at").notNull(),
   decisionReason: text("decision_reason"),
   findings: integer("findings").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const signingKeys = sqliteTable("signing_keys", {
+  keyId: text("key_id").primaryKey(),
+  algorithm: text("algorithm", { enum: ["PS256"] }).notNull(),
+  publicJwk: text("public_jwk").notNull(),
+  status: text("status", { enum: ["active", "retired", "revoked"] }).notNull(),
+  notBefore: text("not_before").notNull(),
+  notAfter: text("not_after"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const approvalEnvelopes = sqliteTable("approval_envelopes", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  runId: text("run_id").notNull(),
+  planDigest: text("plan_digest").notNull(),
+  decision: text("decision", { enum: ["approve", "reject", "cancel"] }).notNull(),
+  payloadJson: text("payload_json").notNull(),
+  envelopeJson: text("envelope_json").notNull(),
+  signature: text("signature").notNull(),
+  keyId: text("key_id").notNull(),
+  nonce: text("nonce").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const consumedArtifactNonces = sqliteTable("consumed_artifact_nonces", {
+  nonce: text("nonce").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  artifactDomain: text("artifact_domain").notNull(),
+  consumedBy: text("consumed_by").notNull(),
+  consumedAt: text("consumed_at").notNull(),
 });
 
 export const connectors = sqliteTable(
@@ -192,4 +231,39 @@ export const rateLimits = sqliteTable("rate_limits", {
   key: text("key").primaryKey(),
   count: integer("count").notNull(),
   expiresAt: integer("expires_at").notNull(),
+});
+
+export const securityEventOutbox = sqliteTable("security_event_outbox", {
+  id: text("id").primaryKey(),
+  eventJson: text("event_json").notNull(),
+  eventDigest: text("event_digest").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: integer("next_attempt_at").notNull(),
+  lastError: text("last_error"),
+  deliveredAt: text("delivered_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const auditAnchors = sqliteTable("audit_anchors", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  chainHead: text("chain_head").notNull(),
+  eventCount: integer("event_count").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  envelopeJson: text("envelope_json").notNull(),
+  signature: text("signature").notNull(),
+  keyId: text("key_id").notNull(),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const legalHolds = sqliteTable("legal_holds", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  reason: text("reason").notNull(),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+  releasedBy: text("released_by"),
+  releasedAt: text("released_at"),
 });

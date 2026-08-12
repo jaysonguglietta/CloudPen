@@ -7,22 +7,23 @@ CloudPen is a security-validation control plane. It does not currently execute A
 - Sites provides the external identity boundary; identity headers are accepted only on the configured canonical origin, and application roles are enforced from explicit email allowlists.
 - Local development binds to loopback and uses a development identity only in explicit local mode. Local request verification is injected by the loopback Worker boundary, not accepted from clients.
 - Mutation APIs require same-origin requests, bounded JSON bodies, authorization, and D1-backed rate limits.
-- Validation requests create server-owned HMAC-signed plans. Plans are explicitly non-executable in this release.
+- Validation requests create server-owned, versioned PS256-signed plans. Stored signatures and scope are reverified before approval. Plans remain explicitly non-executable.
 - Active canary plans enter `Awaiting approval`; the requester cannot cause execution.
 - State-changing exports use same-origin `POST` requests. Evidence exports are generated server-side, redacted, signed, and logged.
-- Audit events form an append-only hash chain in D1.
+- Audit events form an append-only hash chain in D1 and can be captured in linked, long-lived asymmetric chain-head anchors.
 - Security-relevant mutations and audit events commit atomically; plan decisions and remediation changes use compare-and-set concurrency controls.
 - Remediation risk acceptance is administrator-only and expiring; closure requires signed evidence for the same attack path and reviewer/administrator authority.
 - AWS External IDs are generated from 256 random bits in the browser, validated server-side, and discarded without storing raw values, hints, or reusable digests. Rotation is audited without retaining the replacement value.
 - Evidence exports pass through an explicit fail-closed credential, token, private-key, and URL-credential sanitizer before signing.
 - HTML scripts receive fresh per-response CSP nonces; inline script attributes and non-nonced scripts are blocked.
-- The trusted entry point emits correlated, structured, privacy-minimized security events suitable for export to an independently controlled SIEM.
+- The trusted entry point emits correlated, structured, privacy-minimized security events to an exact HTTPS SIEM endpoint and durably queues delivery failures.
+- Legal holds, bounded lifecycle maintenance, signed logical backup manifests, and fail-closed production-readiness checks are implemented.
 - Production safety controls cannot be disabled through the API.
 - Security headers, clean build outputs, dependency auditing, tests, and CI gates are enforced.
 
 ## Production prerequisites
 
-Set `CLOUDPEN_ADMIN_EMAILS`, an exact `PUBLIC_APP_ORIGIN`, and a unique secret `CLOUDPEN_PLAN_SIGNING_KEY` in the Sites environment. Keep access mode private/custom. Do not place credentials in source, browser storage, D1, logs, or evidence. Apply reviewed D1 migrations before serving a new release.
+Set application membership/role configuration, an exact HTTPS `PUBLIC_APP_ORIGIN`, the external signer URL/token/key ID/pinned public JWK, SIEM URL/token, and `CLOUDPEN_PRODUCTION_MODE=1`. Keep access mode private/custom. Do not place credentials in source, browser storage, D1, logs, backups, or evidence. Apply reviewed D1 migrations before serving a new release and require `/api/admin/readiness` to pass.
 
 ## Deliberately disabled
 
@@ -31,7 +32,7 @@ Set `CLOUDPEN_ADMIN_EMAILS`, an exact `PUBLIC_APP_ORIGIN`, and a unique secret `
 - Plan approval and execution APIs
 - Customer data collection
 
-These controls require a customer-hosted runner, workload identity, KMS-backed asymmetric signing, one-time nonces, account-ownership proof, separate approvers, per-module AWS allowlists, egress restrictions, and independent security review.
+Execution still requires a customer-hosted runner, workload identity, single-use nonce consumption, account-ownership proof, per-module AWS allowlists, egress restrictions, customer kill switch, cleanup attestation, and independent security review. The control plane's KMS signatures and separate approvers are necessary but not sufficient.
 
 ## Reporting
 

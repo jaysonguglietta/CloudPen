@@ -43,3 +43,6 @@ next-env.d.ts
 /outputs/
 /work/
 /cloudpen-sbom.cdx.json
+/.aws-sam/
+__pycache__/
+*.pyc

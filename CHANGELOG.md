@@ -4,7 +4,23 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- Versioned PS256 artifact protocol with KMS signer adapter, deployable AWS KMS/Lambda signer stack, pinned public-key registry, independent verifier CLI, and tamper/replay/expiry/downgrade test vectors.
+- Membership-derived multi-workspace context and two-tenant isolation tests.
+- Signed approval envelopes bound to stored, reverified plan payloads and atomic mutation/audit commits.
+- Signed audit-chain anchors, signed logical workspace backup manifests, legal holds, and lifecycle maintenance.
+- Exact-endpoint SIEM delivery with privacy-minimized events, durable D1 outbox, bounded retry, and backoff.
+- Fail-closed production readiness endpoint and GitHub release/SBOM provenance attestations.
+
+### Security
+
+- Removed shared HMAC signing from the deployed application path.
+- Production configuration now fails readiness when local/ephemeral signing, KMS signer, pinned public key, HTTPS origin, SIEM, or durable state requirements are not satisfied.
+
+### Release status
+
+- Source-side hardening is implemented, but production promotion remains blocked until the KMS stack and independent SIEM are provisioned, a platform restore drill and tagged attestation verification are recorded, and an independent assessment is complete. Cloud execution remains disabled.
 
 ## 0.2.0-rc.2 — 2026-08-12
 

@@ -25,14 +25,22 @@ There is no supported self-hosted public deployment and no production AWS runner
 | `CLOUDPEN_OPERATOR_EMAILS` | Optional | No | Comma-separated operators |
 | `CLOUDPEN_REVIEWER_EMAILS` | Optional | No | Comma-separated reviewers |
 | `CLOUDPEN_VIEWER_EMAILS` | Optional | No | Comma-separated read-only users |
-| `CLOUDPEN_PLAN_SIGNING_KEY` | Hosted | Yes | Unique high-entropy HMAC key, minimum 32 characters |
+| `CLOUDPEN_PRODUCTION_MODE` | Production | No | Must be `1`; enables fail-closed readiness expectations |
+| `CLOUDPEN_WORKSPACE_ID` | Optional | No | Default workspace slug for single-membership/fallback deployments |
+| `CLOUDPEN_SIGNER_URL` | Production | No | Exact HTTPS external KMS signer endpoint ending `/v1/sign` |
+| `CLOUDPEN_SIGNER_TOKEN` | Production | Yes | High-entropy external signer bearer credential, minimum 32 characters |
+| `CLOUDPEN_SIGNING_KEY_ID` | Production | No | Versioned KMS key ARN/identifier bound into every envelope |
+| `CLOUDPEN_SIGNING_PUBLIC_JWK` | Production | No | Independently retrieved public RSA JWK; contains no private material |
+| `CLOUDPEN_SIEM_URL` | Production | No | Exact independently administered HTTPS endpoint ending `/v1/events` |
+| `CLOUDPEN_SIEM_TOKEN` | Production | Yes | High-entropy SIEM delivery bearer credential, minimum 32 characters |
 | `PUBLIC_APP_ORIGIN` | Hosted | No | Exact canonical HTTPS origin, with no path or credentials |
 | `CLOUDPEN_LOCAL_DEV_EMAIL` | Local only | No | Optional development identity override |
-| `CLOUDPEN_LOCAL_MODE` | Local launcher only | No | Enables the loopback-only development identity and an ephemeral per-process signing key when no key is configured |
+| `CLOUDPEN_LOCAL_MODE` | Local launcher only | No | Enables loopback-only development identity and local ephemeral asymmetric signing |
+| `CLOUDPEN_EPHEMERAL_SIGNER` | Tests/local only | No | Enables an in-memory non-exportable RSA test key only on loopback |
 
 Email matching is case-insensitive. If an email occurs in multiple lists, the first role wins in this order: admin, operator, reviewer, viewer. Avoid duplicate membership to keep intent unambiguous.
 
-Never commit a real signing key or use local mode in a shared environment. The ephemeral local key changes when the Worker restarts and is not suitable for durable verification. `.env.example` documents keys only; all `.env*` values except the example are ignored.
+Never commit a signer/SIEM token or use local/ephemeral mode in a shared environment. The ephemeral local key changes when the Worker restarts and is not suitable for durable verification. Production private keys remain in KMS and never enter Sites. `.env.example` documents names only; all `.env*` values except the example are ignored.
 
 ## Durable binding
 
@@ -72,12 +80,14 @@ Before deploying:
 
 1. Keep the Sites access policy `custom` or otherwise private to explicitly approved users.
 2. Configure the application role allowlists.
-3. Generate a unique production signing key with a cryptographically secure generator and store it as a Sites secret.
-4. Set the canonical HTTPS origin.
-5. Confirm logical D1 binding `DB` and inspect the migrations.
-6. Run every release gate in `testing-and-release.md`.
-7. Verify that `CLOUDPEN_LOCAL_MODE` is absent.
-8. Confirm that no AWS credentials, SDK execution, runner service, or outbound command channel is present.
+3. Deploy and validate `infra/aws-kms-signer` in the approved AWS account; configure its exact URL/token/key ARN and independently retrieved public JWK.
+4. Configure and validate the independently administered SIEM contract in `siem-integration.md`.
+5. Set the canonical HTTPS origin and `CLOUDPEN_PRODUCTION_MODE=1`.
+6. Confirm logical D1 binding `DB`, inspect migrations, and capture a pre-migration platform backup.
+7. Run every release gate in `testing-and-release.md`, including signer tests and provenance.
+8. Verify that `CLOUDPEN_LOCAL_MODE` and `CLOUDPEN_EPHEMERAL_SIGNER` are absent.
+9. Require `/api/admin/readiness` to return `200` and create/independently verify a synthetic plan and audit anchor.
+10. Confirm that no AWS credentials, SDK execution, runner service, or outbound command channel exists in the web application.
 
 After deployment, verify unauthenticated denial, unauthorized-user denial, authorized rendering, security headers, D1 plan creation, audit creation, and evidence export using synthetic paths only.
 
@@ -88,7 +98,7 @@ Application rollback and database rollback are separate decisions.
 - Prefer deploying the last known-good application version.
 - Do not reverse a database migration blindly. Migration `0001` rebuilds `validation_runs` to expand its state constraint, then adds new workflow and exposure tables; preserve a verified backup and test the migration against a copy before hosted rollout.
 - Preserve audit and plan records unless an approved retention or incident procedure requires otherwise.
-- Rotate the signing key if a rollback was triggered by suspected secret exposure; old HMAC packages then require an explicit historical verification policy.
+- Revoke the affected KMS key version and signer credential if compromise is suspected. Retain uncompromised historical public keys and signed cutoff evidence under the documented verification policy.
 
 ## Production readiness blockers
 
