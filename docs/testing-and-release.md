@@ -77,7 +77,8 @@ Automation does not replace review. Before a hosted release, confirm:
 - [ ] Security headers still allow the app to function without widening sources unnecessarily.
 - [ ] Production dependency audit is clean; every full-audit exception is documented with reachability, upstream status, and compensating controls.
 - [ ] SBOM and source commit are recorded.
-- [ ] Tagged artifact/SBOM attestation verifies with `gh attestation verify` against this repository.
+- [ ] Tagged artifact provenance verifies with `gh attestation verify cloudpen-control-plane.tar.gz --repo jaysonguglietta/CloudPen --signer-workflow jaysonguglietta/CloudPen/.github/workflows/release-provenance.yml --source-digest COMMIT_SHA --deny-self-hosted-runners`.
+- [ ] The CycloneDX claim verifies independently with the same identity constraints plus `--predicate-type https://cyclonedx.org/bom`.
 - [ ] A signed audit anchor and pre-migration backup are retained independently.
 - [ ] Synthetic smoke tests pass after deployment.
 - [ ] Rollback version and database compatibility are known.
@@ -108,3 +109,5 @@ Retain:
 - access-policy review;
 - synthetic post-deployment test results;
 - approver and rollback decision.
+
+The release workflow emits two distinct signed claims for the deterministic archive: SLSA build provenance and a CycloneDX SBOM predicate. Both Sigstore bundles are uploaded with the release evidence so a verifier can validate them offline as well as through GitHub's attestation API.

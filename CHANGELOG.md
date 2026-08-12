@@ -13,6 +13,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Exact-endpoint SIEM delivery with privacy-minimized events, durable D1 outbox, bounded retry, and backoff.
 - A separately deployable AWS SIEM receiver with strict event validation, digest verification, event-ID deduplication, metadata-only alerting, and 90-day S3 Object Lock `COMPLIANCE` retention.
 - Fail-closed production readiness endpoint and GitHub release/SBOM provenance attestations.
+- Separate SLSA build-provenance and CycloneDX SBOM attestations with retained offline verification bundles.
 
 ### Security
 
@@ -21,7 +22,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 ### Release status
 
-- Source-side hardening is implemented, but production promotion remains blocked until the KMS stack and independent SIEM are provisioned, a platform restore drill and tagged attestation verification are recorded, and an independent assessment is complete. Cloud execution remains disabled.
+- Source-side hardening is implemented. Tagged CycloneDX verification has been exercised; the next tag will also carry the separately enforced SLSA provenance statement. Production promotion remains blocked until the KMS stack and independent SIEM are provisioned, a platform restore drill is recorded, and an independent assessment is complete. Cloud execution remains disabled.
 
 ## 0.2.0-rc.2 — 2026-08-12
 
