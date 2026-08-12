@@ -2,7 +2,7 @@
 
 All notable changes are documented here. CloudPen has not reached a stable public release.
 
-## Unreleased
+## 0.2.0-rc.3 — 2026-08-12
 
 ### Added
 
@@ -11,6 +11,7 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 - Signed approval envelopes bound to stored, reverified plan payloads and atomic mutation/audit commits.
 - Signed audit-chain anchors, signed logical workspace backup manifests, legal holds, and lifecycle maintenance.
 - Exact-endpoint SIEM delivery with privacy-minimized events, durable D1 outbox, bounded retry, and backoff.
+- A separately deployable AWS SIEM receiver with strict event validation, digest verification, event-ID deduplication, metadata-only alerting, and 90-day S3 Object Lock `COMPLIANCE` retention.
 - Fail-closed production readiness endpoint and GitHub release/SBOM provenance attestations.
 
 ### Security

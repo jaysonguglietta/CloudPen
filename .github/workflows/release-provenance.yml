@@ -31,6 +31,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:signer
+      - run: npm run test:siem
       - run: npm test
       - run: npm run security:check
       - name: Generate CycloneDX SBOM

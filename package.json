@@ -1,6 +1,6 @@
 {
   "name": "cloudpen-control-plane",
-  "version": "0.2.0-rc.2",
+  "version": "0.2.0-rc.3",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -21,6 +21,7 @@
     "verify:artifact": "node scripts/verify-artifact.mjs",
     "verify:backup": "node scripts/verify-backup.mjs",
     "test:signer": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra/aws-kms-signer/tests -p 'test_*.py'",
+    "test:siem": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra/aws-siem-collector/tests -p 'test_*.py'",
     "sbom": "npm sbom --sbom-format=cyclonedx > cloudpen-sbom.cdx.json"
   },
   "dependencies": {

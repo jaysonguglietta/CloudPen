@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CloudPen independently deployed immutable security-event collector
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedPattern: "^[a-z0-9-]{3,32}$"
+  AlarmTopicArn:
+    Type: String
+    Description: SNS topic ARN monitored by the production security operator
+    AllowedPattern: "^arn:[a-z0-9-]+:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$"
+
+Resources:
+  CollectorToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub CloudPen ${EnvironmentName} SIEM collector bearer credential
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+      Tags:
+        - { Key: Application, Value: CloudPen }
+        - { Key: SecurityBoundary, Value: SIEM }
+
+  EventArchive:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: COMPLIANCE
+            Days: 90
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - { Key: Application, Value: CloudPen }
+        - { Key: SecurityBoundary, Value: SIEM }
+
+  EventArchivePolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EventArchive
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt EventArchive.Arn
+              - !Sub ${EventArchive.Arn}/*
+            Condition: { Bool: { "aws:SecureTransport": "false" } }
+
+  CollectorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Validates and immutably accepts CloudPen security events
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: handler.lambda_handler
+      CodeUri: src/
+      MemorySize: 256
+      Timeout: 5
+      ReservedConcurrentExecutions: 10
+      Tracing: Active
+      Environment:
+        Variables:
+          COLLECTOR_TOKEN_SECRET_ARN: !Ref CollectorToken
+          EVENT_BUCKET: !Ref EventArchive
+          ALARM_TOPIC_ARN: !Ref AlarmTopicArn
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: AppendAndDeduplicateEvents
+              Effect: Allow
+              Action: [s3:PutObject, s3:GetObject]
+              Resource: !Sub ${EventArchive.Arn}/events/*
+            - Sid: ReadCollectorCredential
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref CollectorToken
+            - Sid: PublishSecurityAlerts
+              Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref AlarmTopicArn
+
+  CollectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CollectorFunction}
+      RetentionInDays: 90
+
+  CollectorApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub cloudpen-${EnvironmentName}-siem
+      ProtocolType: HTTP
+
+  CollectorIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref CollectorApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt CollectorFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 5000
+
+  CollectorRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CollectorApi
+      RouteKey: POST /v1/events
+      Target: !Sub integrations/${CollectorIntegration}
+
+  CollectorStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref CollectorApi
+      StageName: $default
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}'
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 40
+        ThrottlingRateLimit: 20
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/cloudpen-${EnvironmentName}-siem
+      RetentionInDays: 90
+
+  CollectorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CollectorFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CollectorApi}/*/POST/v1/events
+
+  CollectorErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen SIEM collector Lambda errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref CollectorFunction }]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+  CollectorServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen SIEM collector API server errors
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - { Name: ApiId, Value: !Ref CollectorApi }
+        - { Name: Stage, Value: $default }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+  CollectorClientErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen SIEM collector authentication or malformed-request burst
+      Namespace: AWS/ApiGateway
+      MetricName: 4xx
+      Dimensions:
+        - { Name: ApiId, Value: !Ref CollectorApi }
+        - { Name: Stage, Value: $default }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+Outputs:
+  CollectorUrl:
+    Description: Configure as CLOUDPEN_SIEM_URL
+    Value: !Sub https://${CollectorApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/events
+  CollectorTokenSecretArn:
+    Description: Retrieve through the approved secrets workflow and configure as CLOUDPEN_SIEM_TOKEN
+    Value: !Ref CollectorToken
+  EventArchiveBucket:
+    Description: Object-Lock COMPLIANCE archive for minimized security events
+    Value: !Ref EventArchive

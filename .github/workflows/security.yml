@@ -29,6 +29,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:signer
+      - run: npm run test:siem
       - run: npm run docs:check
       - run: timeout 5m npm test
       - run: npm run security:audit:exceptions
