@@ -11,6 +11,7 @@ import {
   type ValidationRun,
 } from "../cloudpen-data";
 import { AuthorizationError, type AuthorizedUser } from "../security/authorization";
+import { sanitizeAttackPathEvidence } from "../security/evidence";
 import { runtimeBindings, signingKey } from "../security/runtime";
 
 const WORKSPACE_ID = "northstar-labs";
@@ -175,21 +176,15 @@ export async function createEvidencePackage(user: AuthorizedUser, attackPathId: 
   const path = await findAttackPath(db, attackPathId);
   if (!path) throw new ValidationError("Unknown attack path.");
   const issuedAt = new Date().toISOString();
+  const sanitized = sanitizeAttackPathEvidence(path);
   const payload = {
     schema: "cloudpen.evidence.v1",
     classification: "CONFIDENTIAL — AUTHORIZED SECURITY VALIDATION",
     workspaceId: WORKSPACE_ID,
     issuedAt,
     issuedTo: user.email,
-    evidence: {
-      pathId: path.id,
-      status: path.status,
-      techniques: path.techniques,
-      observations: path.evidence,
-      rootCause: path.rootCause,
-      remediation: path.remediation,
-    },
-    redaction: { customerPayloads: "removed", credentials: "removed", tokens: "removed" },
+    evidence: sanitized.evidence,
+    redaction: sanitized.redaction,
   };
   const canonical = canonicalJson(payload);
   const digest = await sha256(canonical);
@@ -214,15 +209,18 @@ export async function recordConnectorRequest(
   if (existing) throw new ConflictError("This AWS account already has a connector in the workspace.");
   const id = `CON-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   const createdAt = new Date().toISOString();
-  const externalIdDigest = await sha256(input.externalId);
+  const externalIdPayload = input.externalId.startsWith("cpv1_") ? input.externalId.slice(5) : "";
+  if (!/^[A-Za-z0-9_-]{43}$/.test(externalIdPayload) || new Set(externalIdPayload).size < 12) {
+    throw new ValidationError("Use a CloudPen-generated 256-bit External ID.");
+  }
   await runAuditedMutation(db, () => db.prepare(`INSERT INTO connectors
-      (id, workspace_id, provider, name, account_id, status, external_id_digest, external_id_hint, created_by, created_at, updated_at)
-      VALUES (?, ?, 'AWS', ?, ?, 'Runner required', ?, ?, ?, ?, ?)`)
-    .bind(id, WORKSPACE_ID, input.name, input.accountId, externalIdDigest, `••••${input.externalId.slice(-4)}`, user.email, createdAt, createdAt),
+      (id, workspace_id, provider, name, account_id, status, external_id_status, created_by, created_at, updated_at)
+      VALUES (?, ?, 'AWS', ?, ?, 'Runner required', 'not-retained', ?, ?, ?)`)
+    .bind(id, WORKSPACE_ID, input.name, input.accountId, user.email, createdAt, createdAt),
   user.email, "connector.requested", id, {
     name: input.name,
     accountId: input.accountId,
-    externalIdDigest,
+    externalIdStatus: "not-retained",
     status: "awaiting-runner-provisioning",
   });
   return { id, status: "Runner required" as const };
@@ -251,6 +249,24 @@ export async function getExposureCatalog(user: AuthorizedUser): Promise<Exposure
   };
 }
 
+export async function rotateConnectorExternalId(user: AuthorizedUser, connectorId: string, externalId: string): Promise<void> {
+  const db = database();
+  await enforceRateLimit(db, `connector-rotate:${user.email.toLowerCase()}`, 5, 300);
+  const payload = externalId.startsWith("cpv1_") ? externalId.slice(5) : "";
+  if (!/^[A-Za-z0-9_-]{43}$/.test(payload) || new Set(payload).size < 12) {
+    throw new ValidationError("Use a CloudPen-generated 256-bit External ID.");
+  }
+  const result = await runAuditedMutation(db, () => db.prepare(`UPDATE connectors
+      SET status = 'Runner required', external_id_status = 'not-retained', updated_at = ?
+      WHERE id = ? AND workspace_id = ? AND status != 'Disabled'`)
+    .bind(new Date().toISOString(), connectorId, WORKSPACE_ID),
+  user.email, "connector.external-id.rotated", connectorId, {
+    externalIdStatus: "not-retained",
+    customerTrustUpdateRequired: true,
+  });
+  if (!result.meta.changes) throw new NotFoundError("Active connector not found.");
+}
+
 export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<ControlPlaneSnapshot> {
   const db = database();
   await enforceRateLimit(db, `snapshot-read:${user.email.toLowerCase()}`, 60, 60);
@@ -258,7 +274,7 @@ export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<Con
     db.prepare("SELECT name, data_mode FROM workspaces WHERE id = ?")
       .bind(WORKSPACE_ID).first<{ name: string; data_mode: "demo" | "live" }>(),
     listValidationRuns(user),
-    db.prepare(`SELECT id, name, account_id, provider, status, external_id_hint, created_by,
+    db.prepare(`SELECT id, name, account_id, provider, status, external_id_status, created_by,
       created_at, last_sync_at, error_message FROM connectors WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 100`)
       .bind(WORKSPACE_ID).all<Record<string, unknown>>(),
     db.prepare(`SELECT id, path_id, classification, digest, key_id, created_by, created_at
@@ -277,7 +293,7 @@ export async function getControlPlaneSnapshot(user: AuthorizedUser): Promise<Con
   ]);
   const connectors: ConnectorRecord[] = connectorRows.results.map((row) => ({
     id: String(row.id), name: String(row.name), accountId: String(row.account_id), provider: "AWS",
-    status: row.status as ConnectorRecord["status"], externalIdHint: String(row.external_id_hint),
+    status: row.status as ConnectorRecord["status"], externalIdStatus: "not-retained",
     createdBy: String(row.created_by), createdAt: String(row.created_at),
     lastSyncAt: row.last_sync_at ? String(row.last_sync_at) : null,
     errorMessage: row.error_message ? String(row.error_message) : null,
@@ -538,9 +554,10 @@ async function findAttackPath(db: D1Database, pathId: string): Promise<AttackPat
 
 async function expireStalePlans(db: D1Database): Promise<void> {
   const now = new Date().toISOString();
-  await db.prepare(`UPDATE validation_runs SET status = 'Expired', updated_at = ?
+  const result = await db.prepare(`UPDATE validation_runs SET status = 'Expired', updated_at = ?
     WHERE workspace_id = ? AND status IN ('Planned', 'Awaiting approval', 'Approved') AND expires_at <= ?`)
     .bind(now, WORKSPACE_ID, now).run();
+  if (result.meta.changes) emitServiceSecurityEvent("automatic_plan_expiration", { count: result.meta.changes });
 }
 
 async function verifyAuditChain(db: D1Database): Promise<boolean> {
@@ -559,18 +576,18 @@ async function verifyAuditChain(db: D1Database): Promise<boolean> {
   while (byPrevious.has(previousHash)) {
     const row = byPrevious.get(previousHash)!;
     let details: unknown;
-    try { details = JSON.parse(String(row.details_json)); } catch { return false; }
+    try { details = JSON.parse(String(row.details_json)); } catch { return auditVerificationFailure("invalid_details_json"); }
     const event = {
       id: String(row.id), workspaceId: WORKSPACE_ID, actorEmail: String(row.actor_email),
       action: String(row.action), target: String(row.target), details,
       previousHash: String(row.previous_hash), createdAt: String(row.created_at),
     };
     const expected = await sha256(canonicalJson(event));
-    if (expected !== String(row.event_hash)) return false;
+    if (expected !== String(row.event_hash)) return auditVerificationFailure("event_hash_mismatch");
     previousHash = String(row.event_hash);
     visited += 1;
   }
-  return visited === rows.length;
+  return visited === rows.length || auditVerificationFailure("chain_length_mismatch");
 }
 
 async function enforceRateLimit(db: D1Database, key: string, limit: number, windowSeconds: number): Promise<void> {
@@ -679,8 +696,29 @@ async function sha256(value: string): Promise<string> {
 }
 
 async function hmac(value: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(signingKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return toBase64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+  try {
+    const key = await crypto.subtle.importKey("raw", encoder.encode(signingKey()), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return toBase64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+  } catch (error) {
+    emitServiceSecurityEvent("signing_failure", { errorType: error instanceof Error ? error.name : "UnknownError" });
+    throw error;
+  }
+}
+
+function auditVerificationFailure(reason: string): false {
+  emitServiceSecurityEvent("audit_verification_failed", { reason });
+  return false;
+}
+
+function emitServiceSecurityEvent(category: string, fields: Record<string, string | number>): void {
+  console.warn(JSON.stringify({
+    schema: "cloudpen.security-event.v1",
+    timestamp: new Date().toISOString(),
+    requestId: null,
+    category,
+    outcome: "alert",
+    ...fields,
+  }));
 }
 
 function toBase64Url(value: ArrayBuffer): string {

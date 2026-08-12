@@ -22,6 +22,12 @@ Keep CloudPen available for authorized control-plane evaluation without enabling
 - Periodically create and inspect a synthetic signed plan and evidence package.
 - Verify that the runner remains disabled and no AWS credentials exist.
 
+### Security telemetry and SIEM export
+
+Each trusted entry-point request emits one JSON event with schema `cloudpen.security-event.v1`, a random request ID also returned as `X-Request-ID`, timestamp, normalized route template, method, category, outcome, status, duration, capability class, role, hashed actor ID, and local-mode flag. Query strings, bodies, evidence values, External IDs, credentials, tokens, signing material, and raw email addresses are excluded. JSON serialization prevents newline or field injection from changing the event structure.
+
+Hosted operators must export Worker logs with Cloudflare Logpush (or the hosting platform's equivalent) to an independently administered SIEM with encryption in transit/at rest, least-privilege access, immutable retention, and a documented deletion period. Alert on repeated `authorization_denied`, `cross_origin_denied`, `body_size_denied`, `rate_limit_denied`, `internal_failure`, and `identity_origin_denied` categories; any hosted event with `localMode: true`; audit-chain verification failure; and signing failures. Retain request telemetry for 90 days by default unless legal/privacy requirements specify a shorter period. Never enable body capture.
+
 ## Security signals
 
 Prioritize investigation of:
@@ -69,6 +75,12 @@ Current packages identify key `cloudpen-plan-v1`, but the code supports one acti
 6. Treat old packages as historical artifacts requiring the retired key under controlled custody, or declare them unverifiable after the cutoff.
 
 Do not keep retired keys in source or general environment files. Multi-key verification and asymmetric KMS signing are required before production evidence workflows.
+
+## Connector External ID rotation
+
+External IDs are one-time customer-controlled values in this non-executable release. Creation and rotation generate 256 random bits in the browser; the API validates the `cpv1_` envelope and immediately discards it without storing a hint or digest. Operators must copy the value before committing the dialog, update the AWS role trust condition through the customer's approved change process, and then re-run ownership verification when a future runner supports it.
+
+Rotation returns the connector to `Runner required` and records only actor, connector, time, and `externalIdStatus: not-retained`. The migration from earlier builds deliberately drops stored SHA-256 digests and hints. If a copied value is lost, generate another rotation value; it cannot be recovered from CloudPen. Disable the AWS trust relationship directly during revocation or suspected exposure because this control plane holds no credential and cannot revoke it remotely.
 
 ## Audit-chain verification
 
