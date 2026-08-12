@@ -600,15 +600,26 @@ export async function updateRemediation(
     riskAcceptanceExpiresAt: riskExpiry,
     revalidationEvidenceId: evidenceId,
   };
-  const result = await runAuditedMutation(db, workspaceId, () => db.prepare(`UPDATE remediations SET
-      status = ?, updated_at = ?, version = version + 1, transition_reason = ?,
-      risk_accepted_by = ?, risk_acceptance_reason = ?, risk_acceptance_expires_at = ?, revalidation_evidence_id = ?
-      WHERE id = ? AND workspace_id = ? AND status = ? AND version = ?`)
-    .bind(input.status, now, input.reason,
-      input.status === "Risk accepted" ? user.email : null,
-      input.status === "Risk accepted" ? input.reason : null,
-      riskExpiry, evidenceId, id, workspaceId, current.status, current.version),
-  user.email, "remediation.status.updated", id, details);
+  let result: D1Result;
+  try {
+    result = await runAuditedMutation(db, workspaceId, () => db.prepare(`UPDATE remediations SET
+        status = ?, updated_at = ?, version = version + 1, transition_reason = ?,
+        risk_accepted_by = ?, risk_acceptance_reason = ?, risk_acceptance_expires_at = ?, revalidation_evidence_id = ?
+        WHERE id = ? AND workspace_id = ? AND status = ? AND version = ?`)
+      .bind(input.status, now, input.reason,
+        input.status === "Risk accepted" ? user.email : null,
+        input.status === "Risk accepted" ? input.reason : null,
+        riskExpiry, evidenceId, id, workspaceId, current.status, current.version),
+    user.email, "remediation.status.updated", id, details);
+  } catch (error) {
+    // The batch sentinel deliberately rejects a no-op optimistic update so the
+    // audit insert is rolled back with it. Surface that expected race as a
+    // client conflict instead of leaking the database constraint as a 500.
+    if (isAtomicMutationRejected(error)) {
+      throw new ConflictError("The remediation changed before this transition was committed.");
+    }
+    throw error;
+  }
   if (!result.meta.changes) throw new ConflictError("The remediation changed before this transition was committed.");
 }
 
@@ -1082,6 +1093,10 @@ async function prepareAuditInsert(
 
 function isAuditChainRace(error: unknown): boolean {
   return /UNIQUE constraint failed: audit_events\.workspace_id, audit_events\.previous_hash/i.test(String(error));
+}
+
+function isAtomicMutationRejected(error: unknown): boolean {
+  return /CHECK constraint failed: id/i.test(String(error));
 }
 
 function database(): D1Database {
