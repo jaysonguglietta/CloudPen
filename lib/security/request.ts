@@ -79,6 +79,7 @@ export function safeApiError(error: unknown): Response {
   const message = status === 500 ? "The request could not be completed." : (error as Error).message;
   console.error("CloudPen API request failed", {
     name: error instanceof Error ? error.name : "UnknownError",
+    message: error instanceof Error ? sanitizeDiagnostic(error.message) : "Unknown failure",
     status,
   });
   const category = status === 429 ? "rate_limit_denied"
@@ -90,4 +91,8 @@ export function safeApiError(error: unknown): Response {
     status,
     headers: { "x-cloudpen-security-event": category },
   });
+}
+
+function sanitizeDiagnostic(value: string): string {
+  return value.replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").slice(0, 240);
 }

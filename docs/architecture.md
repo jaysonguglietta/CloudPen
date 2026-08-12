@@ -14,6 +14,8 @@ flowchart LR
   P --> A["Application RBAC and request controls"]
   A --> C["Control-plane service"]
   C --> D[("Cloudflare D1")]
+  C -->|"Canonical envelope only"| K["External KMS signer"]
+  W -->|"Privacy-minimized events"| Q["Independent SIEM"]
   W --> B["Browser dashboard"]
   C --> X["Exposure snapshots and graph records"]
   C -. "Enrollment record only; no channel" .-> R["Future customer-hosted runner"]
@@ -40,7 +42,7 @@ Attackers can control request methods, headers, bodies, timing, and browser stat
 
 ### 2. Dispatcher identity to application authorization
 
-An authenticated email is mapped server-side to one role through environment allowlists. A Sites visitor without an application role is denied. Role order is deterministic: admin, operator, reviewer, then viewer.
+An authenticated email is resolved server-side to a workspace membership and role. Environment allowlists remain a controlled single-workspace bootstrap fallback. Requested workspace headers are accepted only when that identity has a matching membership.
 
 ### 3. API route to durable state
 
@@ -66,7 +68,9 @@ sequenceDiagram
   API->>CP: Path ID, mode, acknowledgement
   CP->>DB: Load enforced guardrails and rate bucket
   CP->>CP: Build canonical expiring non-executable plan
-  CP->>CP: SHA-256 digest and HMAC-SHA-256 signature
+  CP->>CP: SHA-256 digest and versioned PS256 envelope
+  CP->>KMS: Canonical envelope only
+  KMS-->>CP: RSA-PSS signature
   CP->>DB: Insert plan and chained audit event
   CP-->>User: Run projection and signed receipt
 ```
@@ -79,7 +83,7 @@ sequenceDiagram
 
 ### Hosted private deployment
 
-Sites provides identity, private/custom access, D1 binding injection, and environment variables. Local mode must be absent. The hosted administrator/operator/reviewer/viewer lists and a unique production signing key are required.
+Sites provides identity, private/custom access, D1 binding injection, and environment variables. Local/ephemeral modes must be absent. Production requires the external KMS signer, pinned public JWK/key ID, independent SIEM, HTTPS origin, and a passing readiness gate.
 
 ## Security invariants
 
@@ -94,8 +98,8 @@ Sites provides identity, private/custom access, D1 binding injection, and enviro
 
 ## Known architectural limitations
 
-- The current deployment is one configured organization. Tables and queries are tenant scoped, but workspace lifecycle and switching are not self-service.
+- Membership-derived tenant isolation is implemented and tested across two workspaces, but workspace creation, invitations, switching UI, SCIM, and access certification are not self-service.
 - The first exposure snapshot is a server-owned deterministic demo seed; a real AWS collector is not enrolled.
-- HMAC signatures require shared-secret verification and are not suitable for independent third-party attestation.
-- Runtime schema initialization duplicates the migration as a compatibility measure and must remain synchronized.
-- The framework currently requires inline bootstrap code in the CSP.
+- The external KMS and SIEM components require separate-account provisioning and operational evidence; source support alone does not establish that they are running.
+- Migrations are the only schema authority and must complete before traffic.
+- Scripts are nonce-protected; inline styles remain allowed for framework compatibility.

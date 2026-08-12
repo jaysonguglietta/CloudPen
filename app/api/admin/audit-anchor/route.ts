@@ -1,18 +1,15 @@
 import { requireCapability } from "../../../../lib/security/authorization";
 import { enforceMutationRequest, readJsonObject, safeApiError } from "../../../../lib/security/request";
-import { exportGuardrailPolicy } from "../../../../lib/server/control-plane";
+import { createAuditAnchor } from "../../../../lib/server/control-plane";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
     enforceMutationRequest(request);
     await readJsonObject(request);
-    const user = await requireCapability("read");
-    return Response.json(await exportGuardrailPolicy(user), {
-      headers: {
-        "cache-control": "no-store, private",
-        "content-disposition": "attachment; filename=cloudpen-guardrails.json",
-      },
-    });
+    const user = await requireCapability("configure");
+    return Response.json(await createAuditAnchor(user), { status: 201, headers: { "cache-control": "no-store" } });
   } catch (error) {
     return safeApiError(error);
   }

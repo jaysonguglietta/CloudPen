@@ -8,6 +8,7 @@ Run from a clean checkout with Node.js 22.13.0 or later:
 npm ci
 npm run lint
 npm run typecheck
+npm run test:signer
 npm run docs:check
 npm test
 npm run security:check
@@ -45,6 +46,10 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 - evidence-manifest retention and remediation state transitions;
 - pending runner enrollment constrained to `executable: false`;
 - signed assessment export and audit-chain verification.
+- PS256 tamper, wrong-tenant/audience, replay, expiry, revocation, and downgrade rejection;
+- two-workspace membership isolation;
+- signed audit anchors and logical backup manifests;
+- legal-hold enforcement and fail-closed production readiness;
 - correlated structured telemetry with request-body, External ID, and evidence-secret non-disclosure.
 
 `scripts/security-check.mjs` also verifies that clean builds do not package stale starter assets, the old hard-coded operator identity is absent, security-header code is present, and the local launcher cannot bind to all interfaces.
@@ -63,22 +68,26 @@ Automation does not replace review. Before a hosted release, confirm:
 - [ ] No secrets, tokens, credentials, customer identifiers, evidence, or internal URLs are present.
 - [ ] Sites access remains private/custom.
 - [ ] Production role allowlists and canonical origin are correct.
-- [ ] A unique production signing key is stored as a secret.
-- [ ] `CLOUDPEN_LOCAL_MODE` is absent.
+- [ ] KMS signer URL/token/key ARN and independently retrieved public JWK are correct; the private key never leaves KMS.
+- [ ] SIEM URL/token, alert route, retry/outage behavior, and retention evidence are correct.
+- [ ] `CLOUDPEN_LOCAL_MODE` and `CLOUDPEN_EPHEMERAL_SIGNER` are absent; production mode is enabled.
+- [ ] `/api/admin/readiness` returns `200`.
 - [ ] D1 migration and runtime initialization match.
 - [ ] Every new mutation has capability, origin, body, validation, rate-limit, error, and audit controls.
 - [ ] Security headers still allow the app to function without widening sources unnecessarily.
 - [ ] Production dependency audit is clean; every full-audit exception is documented with reachability, upstream status, and compensating controls.
 - [ ] SBOM and source commit are recorded.
+- [ ] Tagged artifact/SBOM attestation verifies with `gh attestation verify` against this repository.
+- [ ] A signed audit anchor and pre-migration backup are retained independently.
 - [ ] Synthetic smoke tests pass after deployment.
 - [ ] Rollback version and database compatibility are known.
 - [ ] Documentation and changelog match behavior.
 
 ## Additional tests required before real customer data
 
-- Audit-chain corruption tests and external anchoring tests; runtime verification is implemented.
-- Retention, deletion, backup, and restoration tests.
-- Multi-workspace isolation tests after tenancy is designed.
+- Audit-chain corruption tests and independently retained anchor comparison.
+- Platform backup restoration and customer-record deletion exercises; logical signed backup is implemented.
+- SCIM/joiner-mover-leaver and stale-session tests; two-workspace data isolation is implemented.
 - Load and abuse testing for large authenticated request volumes.
 - Full browser CSP injection testing for script elements, event attributes, JavaScript URLs, styles, and Trusted Types compatibility.
 - Privacy review of topology and evidence fields.

@@ -1,0 +1,55 @@
+name: Release provenance
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-provenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - run: npm ci
+      - run: npm run security:audit
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:signer
+      - run: npm test
+      - run: npm run security:check
+      - name: Generate CycloneDX SBOM
+        run: npm sbom --sbom-format=cyclonedx > cloudpen-sbom.cdx.json
+      - name: Package deterministic release artifact
+        run: >-
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner
+          -czf cloudpen-control-plane.tar.gz dist drizzle docs scripts package.json package-lock.json README.md SECURITY.md CHANGELOG.md
+      - name: Attest release and SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: cloudpen-control-plane.tar.gz
+          sbom-path: cloudpen-sbom.cdx.json
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cloudpen-release-evidence
+          path: |
+            cloudpen-control-plane.tar.gz
+            cloudpen-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90

@@ -18,6 +18,9 @@
     "security:audit:exceptions": "node scripts/audit-exceptions.mjs",
     "security:check": "node scripts/security-check.mjs",
     "docs:check": "node scripts/check-docs.mjs",
+    "verify:artifact": "node scripts/verify-artifact.mjs",
+    "verify:backup": "node scripts/verify-backup.mjs",
+    "test:signer": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s infra/aws-kms-signer/tests -p 'test_*.py'",
     "sbom": "npm sbom --sbom-format=cyclonedx > cloudpen-sbom.cdx.json"
   },
   "dependencies": {

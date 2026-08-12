@@ -571,7 +571,11 @@ export default function CloudPenDashboard({
   }
 
   async function exportGuardrails() {
-    const response = await fetch("/api/guardrails/export", { headers: { accept: "application/json" } });
+    const response = await fetch("/api/guardrails/export", {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: "{}",
+    });
     if (!response.ok) return setToast("Signed guardrail export could not be created.");
     const blob = await response.blob();
     const href = URL.createObjectURL(blob);
@@ -1082,7 +1086,7 @@ export default function CloudPenDashboard({
             <div className="modal-actions"><button className="button secondary" onClick={() => setModal(null)}>Cancel</button><button className="button primary" disabled={remediationTransition.reason.trim().length < 8 || (remediationTransition.status === "Risk accepted" && !remediationTransition.riskAcceptanceExpiresAt) || (remediationTransition.status === "Closed" && !remediationTransition.revalidationEvidenceId)} onClick={updateRemediationStatus}>Commit transition</button></div>
           </>}
           {modal === "run" && selectedRun && <>
-            <span className="section-kicker">SIGNED VALIDATION PLAN</span><h2 id="modal-title">{selectedRun.name}</h2><div className="receipt-grid"><div><span>Status</span><strong>{selectedRun.status}</strong></div><div><span>Mode</span><strong>{selectedRun.mode}</strong></div><div><span>Requester</span><strong>{selectedRun.requestedBy}</strong></div><div><span>Expires</span><strong>{selectedRun.expiresAt ? new Date(selectedRun.expiresAt).toLocaleString() : "Unavailable"}</strong></div></div><div className="receipt-block"><span>AUTHORIZATION DIGEST</span><code>{selectedRun.authorizationDigest || "Unavailable"}</code><span>SIGNATURE · HMAC-SHA-256 · cloudpen-plan-v1</span><code>{selectedRun.signature || "Unavailable"}</code><p>Execution flag: <strong>false</strong>. Approval records intent but cannot make this plan executable.</p></div>
+            <span className="section-kicker">SIGNED VALIDATION PLAN</span><h2 id="modal-title">{selectedRun.name}</h2><div className="receipt-grid"><div><span>Status</span><strong>{selectedRun.status}</strong></div><div><span>Mode</span><strong>{selectedRun.mode}</strong></div><div><span>Requester</span><strong>{selectedRun.requestedBy}</strong></div><div><span>Expires</span><strong>{selectedRun.expiresAt ? new Date(selectedRun.expiresAt).toLocaleString() : "Unavailable"}</strong></div></div><div className="receipt-block"><span>AUTHORIZATION DIGEST</span><code>{selectedRun.authorizationDigest || "Unavailable"}</code><span>SIGNATURE · PS256 · VERSIONED KEY</span><code>{selectedRun.signature || "Unavailable"}</code><p>Execution flag: <strong>false</strong>. Approval records intent but cannot make this plan executable.</p></div>
             {selectedRun.decisionReason && <div className="remediation-block"><span>DECISION REASON</span><p>{selectedRun.decisionReason}</p></div>}
             {(selectedRun.status === "Awaiting approval" || selectedRun.status === "Planned" || selectedRun.status === "Approved") && <label className="field"><span>Decision reason</span><input value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} placeholder="Record why this action is authorized" /></label>}
             <div className="modal-actions"><button className="button secondary" onClick={() => setModal(null)}>Close</button>{selectedRun.status === "Awaiting approval" && canApprove && <><button className="button secondary" disabled={decisionReason.trim().length < 4} onClick={() => decideRun(selectedRun, "reject")}>Reject</button><button className="button primary" disabled={decisionReason.trim().length < 4} onClick={() => decideRun(selectedRun, "approve")}>Approve intent</button></>}{(selectedRun.status === "Planned" || selectedRun.status === "Awaiting approval" || selectedRun.status === "Approved") && canPlan && <button className="button ghost" disabled={decisionReason.trim().length < 4} onClick={() => decideRun(selectedRun, "cancel")}>Cancel plan</button>}</div>

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { BoundedBodyReadError, readBoundedUtf8Stream } from "../lib/security/bounded-body.mjs";
+import { verifyArtifact, verifyBackupDocument } from "../scripts/lib/artifact-verifier.mjs";
 
 const port = 32000 + (process.pid % 1000);
 const origin = `http://127.0.0.1:${port}`;
@@ -16,6 +17,7 @@ const identityHeaders = {
 let server;
 let output = "";
 let stateDirectory;
+let signedPlanDocument;
 
 async function request(input, init) {
   const response = await globalThis.fetch(input, init);
@@ -27,7 +29,7 @@ async function request(input, init) {
   });
 }
 
-async function startServer() {
+async function startServer(extraArguments = []) {
   output = "";
   server = spawn("./node_modules/.bin/wrangler", [
     "dev",
@@ -39,8 +41,9 @@ async function startServer() {
     "--var", "CLOUDPEN_OPERATOR_EMAILS:operator@example.com",
     "--var", "CLOUDPEN_VIEWER_EMAILS:viewer@example.com",
     "--var", "CLOUDPEN_REVIEWER_EMAILS:reviewer@example.com",
-    "--var", "CLOUDPEN_PLAN_SIGNING_KEY:integration-test-signing-key-with-at-least-32-bytes",
+    "--var", "CLOUDPEN_EPHEMERAL_SIGNER:1",
     "--var", `PUBLIC_APP_ORIGIN:${origin}`,
+    ...extraArguments,
   ], {
     cwd: new URL("..", import.meta.url),
     env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "server.log") },
@@ -104,6 +107,26 @@ before(async () => {
     encoding: "utf8",
   });
   assert.equal(fixture.status, 0, `${fixture.stdout ?? ""}\n${fixture.stderr ?? ""}`);
+  const tenantFixture = spawnSync("./node_modules/.bin/wrangler", [
+    "d1", "execute", "site-creator-d1",
+    "--local",
+    "--config", "dist/server/wrangler.json",
+    "--persist-to", stateDirectory,
+    "--command", [
+      "INSERT INTO workspaces (id, name, data_mode) VALUES ('acme-security', 'Acme Security', 'demo')",
+      "INSERT INTO memberships (id, workspace_id, email, role) VALUES ('acme-security:tenant2', 'acme-security', 'tenant2@example.com', 'operator')",
+      "INSERT INTO guardrail_policies (workspace_id, updated_by) VALUES ('acme-security', 'system')",
+      "INSERT INTO exposure_snapshots (id, workspace_id, source, status, collected_at) VALUES ('acme-security:seed', 'acme-security', 'demo-seed', 'Complete', CURRENT_TIMESTAMP)",
+      "INSERT INTO exposure_paths (id, workspace_id, snapshot_id, data_json) SELECT 'acme-security:CP-1042', 'acme-security', 'acme-security:seed', data_json FROM exposure_paths WHERE id = 'northstar-labs:CP-1042'",
+      "INSERT INTO rate_limits (key, count, expires_at) VALUES ('northstar-labs:expired:a', 1, 1)",
+      "INSERT INTO rate_limits (key, count, expires_at) VALUES ('northstar-labs:expired:b', 1, 1)",
+    ].join("; "),
+  ], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "tenant-fixture.log") },
+    encoding: "utf8",
+  });
+  assert.equal(tenantFixture.status, 0, `${tenantFixture.stdout ?? ""}\n${tenantFixture.stderr ?? ""}`);
   await startServer();
 });
 
@@ -211,14 +234,51 @@ test("creates a durable signed non-executable plan", async () => {
     body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
   });
   const raw = await response.text();
-  assert.equal(response.status, 201, raw);
+  if (response.status !== 201) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(response.status, 201, `${raw}\n${output}`);
   const body = JSON.parse(raw);
+  signedPlanDocument = body.receipt;
   assert.equal(body.run.status, "Planned");
   assert.equal(body.run.duration, "Not executed");
   assert.equal(body.receipt.executable, false);
-  assert.equal(body.receipt.algorithm, "HMAC-SHA-256");
+  assert.equal(body.receipt.algorithm, "PS256");
+  assert.equal(body.receipt.envelope.schema, "cloudpen.signed-artifact.v2");
+  assert.equal(body.receipt.envelope.workspaceId, "northstar-labs");
+  assert.equal(body.receipt.envelope.audience, "cloudpen-runner.v1");
   assert.match(body.receipt.authorizationDigest, /^[A-Za-z0-9_-]{43}$/);
-  assert.match(body.receipt.signature, /^[A-Za-z0-9_-]{43}$/);
+  assert.match(body.receipt.signature, /^[A-Za-z0-9_-]{500,520}$/);
+});
+
+test("independently rejects tampering, replay, expiry, scope changes, and algorithm downgrade", async () => {
+  assert.ok(signedPlanDocument);
+  const trustedKeyset = { keys: [{
+    keyId: signedPlanDocument.envelope.keyId,
+    algorithm: "PS256",
+    status: "active",
+    publicKeyJwk: signedPlanDocument.publicKeyJwk,
+    notBefore: signedPlanDocument.envelope.issuedAt,
+    notAfter: null,
+  }] };
+  const expected = { domain: "cloudpen.plan.v2", workspaceId: "northstar-labs", audience: "cloudpen-runner.v1" };
+  assert.deepEqual(await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, expected, trustedKeyset), { valid: true, reason: "verified" });
+  assert.equal((await verifyArtifact({ ...signedPlanDocument.payload, mode: "Active canary" }, signedPlanDocument, expected, trustedKeyset)).reason, "payload_digest");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, { ...expected, workspaceId: "other-tenant" }, trustedKeyset)).reason, "scope");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, { ...expected, audience: "attacker-runner" }, trustedKeyset)).reason, "scope");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, {
+    ...signedPlanDocument,
+    envelope: { ...signedPlanDocument.envelope, algorithm: "HS256" },
+  }, expected, trustedKeyset)).reason, "algorithm");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, {
+    ...expected,
+    now: new Date(Date.parse(signedPlanDocument.envelope.expiresAt) + 1),
+  }, trustedKeyset)).reason, "time_window");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, {
+    ...expected,
+    consumedNonces: new Set([signedPlanDocument.envelope.nonce]),
+  }, trustedKeyset)).reason, "replay");
+  assert.equal((await verifyArtifact(signedPlanDocument.payload, signedPlanDocument, expected, {
+    keys: [{ ...trustedKeyset.keys[0], status: "revoked" }],
+  })).reason, "untrusted_key");
 });
 
 test("holds active canary plans for separate approval", async () => {
@@ -254,6 +314,35 @@ test("enforces application roles independently of identity", async () => {
     },
   });
   assert.equal(response.status, 403);
+});
+
+test("derives tenant scope from membership and blocks cross-tenant access", async () => {
+  const tenantIdentity = {
+    "oai-authenticated-user-email": "tenant2@example.com",
+    "oai-authenticated-user-full-name": "Tenant%20Operator",
+    "oai-authenticated-user-full-name-encoding": "percent-encoded-utf-8",
+  };
+  const tenantHeaders = { ...tenantIdentity, "x-cloudpen-workspace-id": "acme-security" };
+  const snapshotResponse = await request(`${origin}/api/control-plane`, { headers: tenantHeaders });
+  assert.equal(snapshotResponse.status, 200);
+  const snapshot = await snapshotResponse.json();
+  assert.equal(snapshot.workspace.id, "acme-security");
+
+  const planResponse = await request(`${origin}/api/validation-runs`, {
+    method: "POST",
+    headers: { ...tenantHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ attackPathId: "CP-1042", mode: "Read-only", acknowledged: false }),
+  });
+  assert.equal(planResponse.status, 201, await planResponse.text());
+
+  const crossTenant = await request(`${origin}/api/control-plane`, {
+    headers: { ...tenantIdentity, "x-cloudpen-workspace-id": "northstar-labs" },
+  });
+  assert.equal(crossTenant.status, 403);
+  const forgedSelection = await request(`${origin}/api/control-plane`, {
+    headers: { ...identityHeaders, "x-cloudpen-workspace-id": "acme-security" },
+  });
+  assert.equal(forgedSelection.status, 403);
 });
 
 test("returns explicit demo provenance and authoritative empty workflow records", async () => {
@@ -531,12 +620,17 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
 });
 
 test("exports a signed guardrail policy that remains non-executable", async () => {
-  const response = await request(`${origin}/api/guardrails/export`, { headers: identityHeaders });
+  const response = await request(`${origin}/api/guardrails/export`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
   const body = await response.json();
   assert.equal(response.status, 200);
   assert.equal(body.payload.executable, false);
-  assert.equal(body.integrity.algorithm, "HMAC-SHA-256");
-  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(body.integrity.algorithm, "PS256");
+  assert.equal(body.integrity.envelope.domain, "cloudpen.guardrails.v2");
+  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{500,520}$/);
 });
 
 test("stages runner enrollment without creating an execution capability", async () => {
@@ -566,7 +660,76 @@ test("exports a signed assessment with provenance and no execution authority", a
   assert.equal(body.payload.assurance.dataMode, "demo");
   assert.equal(body.payload.assurance.executable, false);
   assert.equal(body.payload.assurance.auditChainValid, true);
-  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(body.integrity.algorithm, "PS256");
+  assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{500,520}$/);
+});
+
+test("creates signed audit anchors and verifiable logical backups", async () => {
+  const anchorResponse = await request(`${origin}/api/admin/audit-anchor`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
+  const anchor = await anchorResponse.json();
+  assert.equal(anchorResponse.status, 201, JSON.stringify(anchor));
+  assert.equal(anchor.integrity.envelope.domain, "cloudpen.audit-anchor.v2");
+  assert.match(anchor.payload.chainHead, /^(?:GENESIS|[A-Za-z0-9_-]{43})$/);
+
+  const backupResponse = await request(`${origin}/api/admin/backup`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: "{}",
+  });
+  const backup = await backupResponse.json();
+  assert.equal(backupResponse.status, 200, JSON.stringify(backup));
+  assert.equal(backup.archive.workspaceId, "northstar-labs");
+  assert.equal(backup.manifest.containsSecrets, false);
+  assert.equal(backup.integrity.envelope.domain, "cloudpen.backup-manifest.v2");
+  assert.match(backup.manifest.archiveDigest, /^[A-Za-z0-9_-]{43}$/);
+  const trustedBackupKeys = { keys: [{
+    keyId: backup.integrity.envelope.keyId,
+    algorithm: "PS256",
+    status: "active",
+    publicKeyJwk: backup.integrity.publicKeyJwk,
+    notBefore: backup.integrity.envelope.issuedAt,
+    notAfter: null,
+  }] };
+  const verification = await verifyBackupDocument(backup, { workspaceId: "northstar-labs" }, trustedBackupKeys);
+  assert.deepEqual(verification, { valid: true, reason: "verified" });
+  const tamperedBackup = structuredClone(backup);
+  tamperedBackup.archive.tables.workspaces[0].name = "Attacker rewrite";
+  assert.equal((await verifyBackupDocument(tamperedBackup, { workspaceId: "northstar-labs" }, trustedBackupKeys)).reason, "archive_digest");
+});
+
+test("enforces legal holds and reports fail-closed production readiness", async () => {
+  const readiness = await request(`${origin}/api/admin/readiness`, { headers: identityHeaders });
+  assert.equal(readiness.status, 503);
+  const readinessBody = await readiness.json();
+  assert.equal(readinessBody.ready, false);
+  assert.equal(readinessBody.mode, "evaluation");
+
+  const holdResponse = await request(`${origin}/api/admin/lifecycle`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ action: "create-hold", reason: "Preserve records for security investigation" }),
+  });
+  const hold = await holdResponse.json();
+  assert.equal(holdResponse.status, 201, JSON.stringify(hold));
+  const maintenance = await request(`${origin}/api/admin/lifecycle`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ action: "maintain" }),
+  });
+  assert.equal(maintenance.status, 200);
+  const maintenanceBody = await maintenance.json();
+  assert.equal(maintenanceBody.legalHoldBlockedTelemetryPurge, true);
+  assert.equal(maintenanceBody.expiredRateLimits, 2);
+  const release = await request(`${origin}/api/admin/lifecycle`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ action: "release-hold", id: hold.id, reason: "Investigation complete and archive verified" }),
+  });
+  assert.equal(release.status, 200);
 });
 
 test("emits correlated structured telemetry without request bodies or secrets", async () => {
@@ -584,5 +747,18 @@ test("emits correlated structured telemetry without request bodies or secrets", 
   assert.match(output, /"route":"\/api\/connectors"/);
   assert.doesNotMatch(output, /log-injection-marker|forged-event|test-secret-token-value/);
   assert.doesNotMatch(output, /cpv1_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq/);
+});
+
+test("production mode blocks application traffic when mandatory runtime controls are incomplete", async () => {
+  await stopServer();
+  await startServer(["--var", "CLOUDPEN_PRODUCTION_MODE:1"]);
+  const blocked = await request(`${origin}/`, { headers: identityHeaders });
+  assert.equal(blocked.status, 503);
+  const readiness = await request(`${origin}/api/admin/readiness`, { headers: identityHeaders });
+  assert.equal(readiness.status, 503);
+  const body = await readiness.json();
+  assert.equal(body.ready, false);
+  assert.ok(body.checks.some((check) => check.id === "external_signer" && check.status === "fail"));
+  assert.ok(body.checks.some((check) => check.id === "siem_endpoint" && check.status === "fail"));
 });
 });

@@ -8,15 +8,21 @@ export type RuntimeBindings = {
   CLOUDPEN_VIEWER_EMAILS?: string;
   CLOUDPEN_LOCAL_DEV_EMAIL?: string;
   CLOUDPEN_LOCAL_MODE?: string;
-  CLOUDPEN_PLAN_SIGNING_KEY?: string;
+  CLOUDPEN_WORKSPACE_ID?: string;
+  CLOUDPEN_EPHEMERAL_SIGNER?: string;
+  CLOUDPEN_SIGNER_URL?: string;
+  CLOUDPEN_SIGNER_TOKEN?: string;
+  CLOUDPEN_SIGNING_KEY_ID?: string;
+  CLOUDPEN_SIGNING_PUBLIC_JWK?: string;
+  CLOUDPEN_SIEM_URL?: string;
+  CLOUDPEN_SIEM_TOKEN?: string;
+  CLOUDPEN_PRODUCTION_MODE?: string;
   PUBLIC_APP_ORIGIN?: string;
 };
 
 const bindingKey = Symbol.for("cloudpen.runtime.bindings");
-const localSigningKeyKey = Symbol.for("cloudpen.runtime.local-signing-key");
 type RuntimeGlobal = typeof globalThis & {
   [bindingKey]?: RuntimeBindings;
-  [localSigningKeyKey]?: string;
 };
 
 export function installRuntimeBindings(bindings: RuntimeBindings): void {
@@ -46,26 +52,6 @@ export function configuredOrigin(): string {
   return url.origin;
 }
 
-export function signingKey(): string {
-  const configured = runtimeBindings().CLOUDPEN_PLAN_SIGNING_KEY?.trim();
-  if (configured && configured.length >= 32) return configured;
-
-  if (runtimeBindings().CLOUDPEN_LOCAL_MODE === "1") {
-    const runtime = globalThis as RuntimeGlobal;
-    runtime[localSigningKeyKey] ??= randomBase64Url(32);
-    return runtime[localSigningKeyKey];
-  }
-
-  throw new Error("CLOUDPEN_PLAN_SIGNING_KEY is not configured.");
-}
-
-function randomBase64Url(byteLength: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
 export function roleForEmail(email: string): CloudPenRole | null {
   const normalized = email.trim().toLowerCase();
   const bindings = runtimeBindings();
@@ -80,6 +66,53 @@ export function roleForEmail(email: string): CloudPenRole | null {
     if (parseEmailList(value).has(normalized)) return role;
   }
   return null;
+}
+
+export function configuredWorkspaceId(): string {
+  const value = runtimeBindings().CLOUDPEN_WORKSPACE_ID?.trim() || "northstar-labs";
+  if (!/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(value)) {
+    throw new Error("CLOUDPEN_WORKSPACE_ID must be a 3–64 character lowercase workspace slug.");
+  }
+  return value;
+}
+
+export function productionRuntimeProblems(bindings: RuntimeBindings = runtimeBindings()): string[] {
+  const problems: string[] = [];
+  if (!bindings.DB) problems.push("durable_database");
+  let origin: URL | null = null;
+  try { origin = new URL(bindings.PUBLIC_APP_ORIGIN?.trim() ?? ""); } catch { problems.push("canonical_https_origin"); }
+  if (origin && (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash)) {
+    problems.push("canonical_https_origin");
+  }
+  if (bindings.CLOUDPEN_LOCAL_MODE === "1") problems.push("local_mode_disabled");
+  if (bindings.CLOUDPEN_EPHEMERAL_SIGNER === "1") problems.push("ephemeral_signer_disabled");
+  if (!validExactHttpsEndpoint(bindings.CLOUDPEN_SIGNER_URL, "/v1/sign")) problems.push("external_signer");
+  if ((bindings.CLOUDPEN_SIGNER_TOKEN?.trim().length ?? 0) < 32) problems.push("signer_token");
+  if (!/^[A-Za-z0-9._:/-]{8,200}$/.test(bindings.CLOUDPEN_SIGNING_KEY_ID?.trim() ?? "")) problems.push("signing_key_id");
+  if (!validPublicJwk(bindings.CLOUDPEN_SIGNING_PUBLIC_JWK)) problems.push("signing_public_key");
+  if (!validExactHttpsEndpoint(bindings.CLOUDPEN_SIEM_URL, "/v1/events")) problems.push("siem_endpoint");
+  if ((bindings.CLOUDPEN_SIEM_TOKEN?.trim().length ?? 0) < 32) problems.push("siem_token");
+  return [...new Set(problems)];
+}
+
+function validExactHttpsEndpoint(raw: string | undefined, pathname: string): boolean {
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && url.pathname === pathname;
+  } catch {
+    return false;
+  }
+}
+
+function validPublicJwk(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const jwk = JSON.parse(raw) as JsonWebKey;
+    return jwk.kty === "RSA" && typeof jwk.n === "string" && typeof jwk.e === "string" && !jwk.d;
+  } catch {
+    return false;
+  }
 }
 
 function parseEmailList(value: string | undefined): Set<string> {

@@ -16,8 +16,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ ru
     const user = await requireCapability(decision === "cancel" ? "plan" : "approve");
     const { runId } = await params;
     if (!/^RUN-[A-Z0-9]{8}$/.test(runId)) return Response.json({ error: "Invalid run ID." }, { status: 400 });
-    await decideValidationRun(user, runId, decision, reason);
-    return Response.json({ status: "updated", executable: false }, { headers: { "cache-control": "no-store" } });
+    const result = await decideValidationRun(user, runId, decision, reason);
+    return Response.json({ status: "updated", ...result }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return safeApiError(error);
   }

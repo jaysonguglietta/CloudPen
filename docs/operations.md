@@ -26,7 +26,7 @@ Keep CloudPen available for authorized control-plane evaluation without enabling
 
 Each trusted entry-point request emits one JSON event with schema `cloudpen.security-event.v1`, a random request ID also returned as `X-Request-ID`, timestamp, normalized route template, method, category, outcome, status, duration, capability class, role, hashed actor ID, and local-mode flag. Query strings, bodies, evidence values, External IDs, credentials, tokens, signing material, and raw email addresses are excluded. JSON serialization prevents newline or field injection from changing the event structure.
 
-Hosted operators must export Worker logs with Cloudflare Logpush (or the hosting platform's equivalent) to an independently administered SIEM with encryption in transit/at rest, least-privilege access, immutable retention, and a documented deletion period. Alert on repeated `authorization_denied`, `cross_origin_denied`, `body_size_denied`, `rate_limit_denied`, `internal_failure`, and `identity_origin_denied` categories; any hosted event with `localMode: true`; audit-chain verification failure; and signing failures. Retain request telemetry for 90 days by default unless legal/privacy requirements specify a shorter period. Never enable body capture.
+Hosted production sends events directly under the contract in `siem-integration.md`; delivery failures are retained in the D1 outbox and retried. Platform log export remains a second independent channel. Alert on repeated `authorization_denied`, `cross_origin_denied`, `body_size_denied`, `rate_limit_denied`, `internal_failure`, and `identity_origin_denied`; any hosted event with `localMode: true`; audit-chain verification failure; signing failure; and a nonzero/aging outbox. Retain SIEM events for 90 days by default unless legal/privacy requirements specify otherwise. Never enable body capture.
 
 ## Security signals
 
@@ -65,16 +65,15 @@ Never paste live secrets or customer evidence into GitHub issues, chat, email, o
 
 ## Signing-key rotation
 
-Current packages identify key `cloudpen-plan-v1`, but the code supports one active HMAC secret. A safe rotation therefore requires a maintenance window and documented verification cutoff:
+1. Create a new RSA-3072 KMS signing key without deleting or disabling the old key.
+2. Retrieve its public key independently, convert it to a PS256 JWK, and add it to the trusted verifier keyset.
+3. Configure the new signer key ID/public JWK and deploy while issuance is paused.
+4. Require readiness, issue a synthetic artifact, and verify it from a separate context with the pinned keyset.
+5. Record a signed audit anchor and the exact issuance cutoff. Mark the old key `retired` for historical verification.
+6. Revoke/disable the old key only for compromise or approved policy; retain public material and revocation evidence.
+7. Rotate the signer bearer credential separately; warm Lambda instances refresh it within five minutes.
 
-1. Stop issuing plans and exports.
-2. Record the last package timestamp and digest under the old key.
-3. Replace the Sites secret with a newly generated high-entropy value.
-4. Deploy the new environment revision.
-5. Issue and verify a synthetic package.
-6. Treat old packages as historical artifacts requiring the retired key under controlled custody, or declare them unverifiable after the cutoff.
-
-Do not keep retired keys in source or general environment files. Multi-key verification and asymmetric KMS signing are required before production evidence workflows.
+Private KMS material must never be exported or copied into Sites, D1, source, logs, or backup artifacts.
 
 ## Connector External ID rotation
 
@@ -93,18 +92,11 @@ The application writes canonical event hashes linked by `previous_hash`. Operati
 5. confirm each next `previous_hash` equals the prior event hash;
 6. flag missing, duplicate, reordered, or branched links.
 
-The control-plane snapshot endpoint and Evidence & Audit view run this verification automatically. An external chain anchor is not implemented. Database administrators can still rewrite a complete chain; do not call it immutable evidence.
+The control-plane snapshot endpoint and Evidence & Audit view run this verification automatically. Administrators can create signed linked chain-head anchors through `POST /api/admin/audit-anchor`; production operations must export those anchors to an independent append-only system. A database administrator can still rewrite records after the latest externally retained anchor, so do not call D1 itself immutable evidence.
 
 ## Backup, restore, and retention
 
-Formal production procedures are not implemented because the app holds synthetic data. Before real use, define:
-
-- encrypted D1 backup cadence and retention;
-- restore objectives and rehearsals;
-- per-table retention and deletion rules;
-- legal hold and customer export processes;
-- secure destruction for expired evidence and personal data;
-- restoration validation for audit-chain continuity.
+The application implements lifecycle status, legal holds, bounded operational cleanup, and signed logical backups. Production still requires encrypted platform backup custody and the restore drill in `data-lifecycle.md`; record measured RPO/RTO, audit continuity, signed-manifest verification, and secure destruction of the isolated restore copy.
 
 ## Recovery validation
 

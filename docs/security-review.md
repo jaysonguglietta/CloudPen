@@ -1,409 +1,234 @@
 # Adversarial security review
 
-- **Review date:** 2026-07-31, updated for control-plane expansion 2026-08-03
-- **Scope:** code in this repository, local Worker deployment, and intended private Sites deployment
-- **Deployment classification:** pre-production control-plane prototype
-- **Cloud execution:** absent and deliberately disabled
+- **Review date:** 2026-08-12
+- **Scope:** repository source, migrations, Worker/API behavior, CI/release configuration, KMS signer infrastructure-as-code, and intended private Sites topology
+- **Classification:** production-hardening candidate; cloud execution remains deliberately disabled
 
 ## 1. Executive summary
 
-CloudPen now has a defensible fail-closed control-plane foundation for synthetic evaluation. Identity, roles, exposure snapshots, connectors, plan/approval decisions, evidence manifests, remediation, pending runner enrollment, guardrails, rate limits, and audit events are server-owned in D1. Mutations enforce same-origin bounded JSON input; plans, generated evidence, policies, and reports carry integrity envelopes; core guardrails cannot be disabled; and discovery/runner records are database-constrained to non-executable state.
+CloudPen has a strong fail-closed control-plane implementation. Authentication is delegated to the private Sites dispatcher and followed by application membership/capability checks. Workspace scope is derived server-side, mutations use bounded same-origin JSON, state is D1-owned, security writes and linked audit records commit atomically, plans and decisions use versioned PS256 envelopes, and every runner/discovery artifact remains database-constrained to non-executable state. The suite covers adversarial signing, role separation, races, evidence redaction, and two-tenant isolation.
 
-No confirmed remote code execution, injection, SSRF, XSS, credential leakage, authentication bypass through the supported Sites path, or real cloud data exposure was found in the hardened version. The most important security property is absence: there is no AWS credential flow, runner protocol, or API execution capability.
+No confirmed remote code execution, SQL/command/template injection, SSRF through user input, stored/reflected XSS, authentication bypass in the supported Sites topology, cross-tenant access, secret retention, or cloud-credential exposure was found in this version. The web app contains no AWS execution credentials, arbitrary command channel, or runner.
 
-The system is not production-ready for real tenants or penetration testing. Its residual risks are architectural: identity-header provenance depends on the Sites boundary, the configured organization has no self-service tenant lifecycle, HMAC does not provide independent attestation, audit history lacks an external anchor, retention and recovery are undefined, and the runner protocol is only a non-executable enrollment scaffold. These are release gates, not backlog polish.
+Production approval cannot be established from source changes alone. The KMS signer and SIEM paths are fail-closed and deployable but are not operationally evidenced in the intended external accounts. Platform backup restoration, tagged attestation verification, and independent assessment are also outstanding. `/api/admin/readiness` deliberately reports failure until mandatory runtime controls are configured.
 
 ## 2. System overview and trust boundaries
 
 ### Assets
 
-- User identity, role assignment, and authorization decisions
-- Validation plan scope, guardrails, signature, expiry, and status
-- Evidence observations and integrity metadata
-- Audit attribution and hash-chain continuity
-- AWS account identifiers and non-secret connector lifecycle events; External IDs and their derivatives are not retained
-- D1 data and the plan-signing secret
-- Source, lockfile, CI workflow, migration, and deployment configuration
-
-### Entry points
-
-- `GET /` and `/access-denied`
-- `GET/POST/PATCH /api/validation-runs`
-- `GET/PATCH /api/guardrails`
-- `POST /api/connectors`
-- `POST /api/evidence/{pathId}`
-- `GET /api/control-plane`, signed report/policy exports, remediation, discovery-plan, and runner-enrollment routes
-- `/_vinext/image`
-- Local Wrangler service on `127.0.0.1:8787`
-- Hosted Sites dispatcher and environment bindings
-- Dependency installation, build, CI, and release workflow
-
-### Attacker-controlled inputs
-
-- HTTP methods, paths, query strings, headers, Origin, content type, content length, and bodies
-- Browser state, JavaScript execution, timing, retries, concurrency, and UI manipulation
-- Path IDs, validation mode, acknowledgement, connector name/account/one-time External ID, and guardrail property
-- Dependency and source contributions
-- Local processes able to reach loopback
+- Sites identity, application memberships, roles, and authorization decisions
+- Workspace-scoped topology, connectors, plans, approvals, evidence metadata, remediation, and legal holds
+- Canonical payloads, artifact signatures, public-key registry, nonces, and revocation state
+- Hash-chained audit events, signed anchors, and security telemetry
+- D1 state, migrations, source, lockfile, release artifact, SBOM, and provenance claims
+- External KMS private key and signer/SIEM bearer credentials, which must remain outside this repository and D1
 
 ### Trust boundaries
 
-See `architecture.md`. The highest current boundary is Sites identity to application authorization. The highest future boundary is control plane to customer-hosted runner; it does not exist today.
+1. Untrusted internet/browser to private Sites identity dispatcher.
+2. Dispatcher-established identity to application membership and capability enforcement.
+3. API parsing/business rules to workspace-scoped D1 state.
+4. Worker to exact configured external KMS signer and SIEM endpoints.
+5. Source/CI to tagged release artifacts and GitHub attestation trust root.
+6. Control plane to a future customer-hosted runner. This boundary does not exist and remains blocked.
 
 ## 3. Threat model
 
-### Attacker personas
-
-| Persona | Capability | Objective |
+| Attacker | Capabilities | Primary objectives |
 | --- | --- | --- |
-| Unauthenticated internet attacker | Arbitrary requests and browser automation | Reach private topology, exhaust service, bypass sign-in |
-| Authenticated unauthorized workspace user | Valid Sites identity but no CloudPen role | Gain application access or create plans |
-| Malicious viewer/operator | Valid lower-privilege role and browser control | Escalate role, disable safeguards, forge evidence or completion |
-| Compromised browser/client | Modify UI state and requests | Treat client values as approvals or authoritative results |
-| Compromised control plane | Server execution or signing-secret access | Issue fraudulent plans, exfiltrate state, rewrite records |
-| Database administrator/compromise | Direct D1 read/write | Alter plans, identities, audit history, or rate limits |
-| Supply-chain attacker | Dependency, action, build, or release compromise | Execute during install/build or alter deployed artifact |
-| Future malicious/compromised runner | Workload identity and cloud API reach | Escape plan scope, access customer data, persist, hide activity |
+| Internet attacker | Arbitrary requests, headers, origins, timing, concurrency | Forge identity, exhaust service, reach internal state |
+| Unauthorized Sites user | Valid platform identity without membership | Enter a workspace or enumerate topology |
+| Malicious viewer/operator/reviewer | Valid lower privilege and browser control | Escalate, self-approve, cross tenants, forge evidence |
+| Compromised browser | Modify requests/UI and steal displayed data | Treat client state as authority or trigger victim actions |
+| Database administrator/attacker | Read/write D1 | Rewrite plans, keys, audit history, or lifecycle state |
+| Control-plane compromise | Server execution and environment access | Abuse signer, exfiltrate state, suppress telemetry |
+| Supply-chain attacker | Dependency/action/build/release influence | Run in CI/build or substitute deployed artifacts |
+| Future compromised runner | Customer workload identity and cloud reach | Escape plan scope, replay, persist, or hide cleanup failure |
 
-### Primary attack paths
+Likely attack chains include direct-origin identity-header spoofing if the dispatcher is bypassed; compromised operator plus missing separation of duties; database rewrite plus absent external anchor; signer-token theft plus signing-oracle abuse; SIEM outage plus outbox tampering; and future runner replay/scope confusion.
 
-1. Forge identity headers by bypassing the trusted dispatcher.
-2. Use a valid low-privilege identity to call an unprotected mutation.
-3. Submit cross-origin or oversized requests to abuse state or resources.
-4. Modify browser state to mark a run completed or fabricate evidence.
-5. Disable approval/canary/redaction/cleanup controls before creating a plan.
-6. Steal the shared signing key and forge plan or evidence envelopes.
-7. Alter D1 records and recompute the entire local audit chain.
-8. Expose real topology by replacing synthetic client data without changing architecture.
-9. Compromise dependencies, CI actions, or stale build output.
-10. Introduce a future runner that accepts arbitrary actions, replayed plans, broad credentials, or unsafe egress.
+## 4. Attack surface inventory
 
-## 4. Attack-surface inventory
-
-| Surface | Current controls | Remaining concern |
+| Surface | Controls | Residual concern |
 | --- | --- | --- |
-| Page authentication | Sites identity, server redirect, application allowlist | Header provenance requires dispatcher isolation |
-| RBAC | Server capability matrix in every API | Static environment lists lack lifecycle automation |
-| Mutations | Exact Origin, Fetch Metadata, bounded JSON media type, field validation | No general API client authentication model by design |
-| D1 | Prepared statements, workspace predicates, constraints, indexes | One configured organization and admin-level tampering remain |
-| Plan creation | Server timestamps/status, enforced policy, expiry, digest/HMAC, non-executable | HMAC shared secret and no verifier/runner protocol |
-| Evidence | Server-generated, redacted fields, signed, non-cacheable, manifest-retained, audited | Synthetic only; retention and asymmetric verification absent |
-| Approval | Distinct reviewer/admin, required reason, expiry, compare-and-set audited transition | Approved intent remains non-executable; no step-up or nonce protocol |
-| Discovery/runner staging | Service allowlist, pinned fingerprint, database `executable = 0` | No ownership proof, workload identity, delivery, or collector exists |
-| Audit | Application append-only hash chain, branch-prevention index | No external anchor; DB admin can rewrite full chain |
-| Rate limiting | D1 per-email counters on primary operations | No edge/global anonymous limiter documented |
-| Worker response | CSP, frame denial, nosniff, referrer, permissions, COOP/CORP, HSTS on HTTPS | CSP still permits inline framework code |
-| Local runtime | Explicit loopback, project-local D1, security artifact test | Any local process can reach it; Local Explorer is development-only |
-| Build/CI | Clean `dist`, lockfile, zero audit at validation, pinned actions, read-only CI | Registry/package compromise and future advisories remain possible |
+| Sites/Worker identity | Private access, canonical-origin identity check, app membership | Direct Worker origin must remain unreachable; headers are not independently signed |
+| API mutations | Exact Origin/Fetch Metadata, JSON media type, streamed 8 KiB limit, strict fields, capabilities, rate limits | Edge/global anonymous volumetric protection is platform-owned |
+| D1 | Prepared statements, workspace predicates, constraints, optimistic concurrency, atomic audit sentinel | DB administrator can rewrite state after latest external anchor |
+| Signing | PS256, KMS adapter, strict domains/audience/workspace/nonce/expiry, key registry, independent verifier | KMS deployment, token custody, public-key pinning, and rotation need operational proof |
+| SIEM egress | Exact HTTPS path, bearer auth, digest, timeout, no redirects, durable retry queue | Collector trust, alert routing, and immutable retention need operational proof |
+| Backup/lifecycle | Signed logical manifest, legal holds, bounded cleanup | Platform backup encryption and full restore rehearsal remain external |
+| Browser | Server-owned data, output-safe React, nonce CSP, frame/MIME/privacy headers | Inline styles allowed; authorized browser receives current page snapshot |
+| Build/release | Lockfile, audits, CodeQL, pinned actions, SBOM, deterministic artifact, attestation workflow | Tagged workflow has not yet produced/verified this candidate's attestation |
+| Runner/cloud | No channel, credential, SDK execution, or executable state | Any future enablement is a new critical boundary |
 
 ## 5. Prioritized findings
 
-### SR-01 — Identity headers require an unbypassable trusted dispatcher
+### SR-01 — Identity-header provenance depends on an unbypassable Sites dispatcher
 
-- **Severity:** High if the Worker is directly exposed; Informational in the supported private Sites topology
+- **Severity:** High if a direct origin is exposed; Informational in the supported private topology
 - **Confidence:** High
-- **Affected:** `app/chatgpt-auth.ts`, `lib/security/authorization.ts`, deployment architecture
-- **Status:** Conditional residual risk
+- **Affected:** `app/chatgpt-auth.ts`, `worker/index.ts`, deployment routing
+- **Type:** Conditional residual risk
 
-**Description:** CloudPen accepts `oai-authenticated-user-*` headers as authenticated identity. The application does not validate a dispatcher signature because Sites is expected to inject and protect these headers.
+The app consumes `oai-authenticated-user-*` headers established by Sites. It checks that identity is delivered on the configured origin and strips the local verification header, but it cannot cryptographically distinguish a forged identity header reaching a directly exposed Worker hostname.
 
-**Evidence:** `getChatGPTUser()` reads the email header directly; role lookup then trusts that email. Local mode is independently restricted to loopback.
+An attacker who can bypass Sites and send requests to an alternate origin configured as canonical could claim an administrator email. Impact includes privileged plan/configuration/evidence actions, although cloud execution remains impossible. Keep Sites private/custom, remove direct-origin reachability, and test every hostname with forged headers. Any non-Sites deployment must replace header trust with verified OIDC/JWT issuer, audience, signature, expiry, nonce, and organization claims.
 
-**Exploitation scenario:** If an operator exposes the Worker directly or places an untrusted proxy in front of it without stripping and re-establishing identity headers, an attacker supplies an administrator email and reaches privileged routes.
+**CWE/OWASP:** CWE-345; OWASP A07.
 
-**Impact:** Authentication bypass, guardrail administration, signed plan creation, connector requests, and evidence access.
+### SR-02 — Full authorized snapshot delivery increases real-topology exposure
 
-**Recommended fix:** Treat private Sites dispatch as mandatory. Do not expose an alternate Worker URL. If other hosting is required, replace header trust with verified OIDC/JWT middleware using issuer, audience, signature, expiry, nonce, and organization claims, and strip external identity headers at the first trusted hop.
-
-**Patch guidance:** Add a platform-authentication adapter with explicit deployment modes; fail startup when hosted mode lacks a supported verifier. Do not add a shared header secret as the long-term identity solution.
-
-**Validation:** Send forged identity headers to every reachable hostname. Only the trusted dispatcher route may accept dispatcher-established identity. Verify direct origin hostnames are unavailable.
-
-**CWE/OWASP:** CWE-345; OWASP A07 Identification and Authentication Failures.
-
-### SR-02 — Minimize real topology delivered to each authorized browser
-
-- **Severity:** High for real tenant data; Informational for current synthetic data
+- **Severity:** High for real tenants; Informational for current demo data
 - **Confidence:** High
-- **Affected:** `lib/cloudpen-data.ts`, `app/cloudpen-dashboard.tsx`
-- **Status:** Partially remediated; pagination/field minimization remains a production gate
+- **Affected:** `app/page.tsx`, `lib/server/control-plane.ts`, dashboard snapshot flow
+- **Type:** Design gap
 
-**Description:** The static catalog is now seeded into a server-owned D1 snapshot and passed by the authenticated server page. This removes hidden catalog data from the client bundle, but the current page still receives the complete authorized demo snapshot instead of paginated, purpose-minimized records.
+The server correctly scopes the catalog by membership/workspace, but the main page receives the complete current workspace demo snapshot. A compromised authorized browser can read everything delivered for that view. Before real topology ingestion, add paginated/path-specific endpoints, purpose-minimized projections, field classification, and per-view authorization. Test built bundles and rendered responses for unrelated accounts, ARNs, evidence, and other tenants.
 
-**Evidence:** `getExposureCatalog()` reads workspace-scoped snapshot tables; `app/page.tsx` supplies that authorized projection to the client dashboard.
+**CWE/OWASP:** CWE-200; OWASP A01.
 
-**Exploitation scenario:** A future implementation replaces samples with real topology while retaining the client bundle. Any viewer or compromised browser downloads the full catalog, including paths not required for the active view.
-
-**Impact:** Sensitive topology disclosure, cross-workspace leakage if tenancy is added incorrectly, and valuable reconnaissance.
-
-**Recommended fix:** Preserve the server-owned model and add paginated/path-specific APIs before real ingestion. Minimize fields, classify and redact evidence, and avoid preloading paths unrelated to the current view.
-
-**Validation:** Search built client chunks for tenant account IDs, resource ARNs, evidence, and hidden records. Add tests that one workspace cannot enumerate another.
-
-**CWE/OWASP:** CWE-200; OWASP A01 Broken Access Control.
-
-### SR-03 — Fixed single-workspace scoping is not multi-tenant isolation
-
-- **Severity:** Medium now; Critical if multiple real tenants are introduced without redesign
-- **Confidence:** High
-- **Affected:** `lib/server/control-plane.ts`, D1 schema
-- **Status:** Production blocker for multi-tenancy
-
-**Description:** Every new product table and query is scoped to the configured workspace, and request bodies cannot select a workspace. The current deployment nevertheless supports one organization only and lacks server-derived multi-workspace selection, tenant-specific keys, lifecycle administration, and two-workspace negative tests.
-
-**Exploitation scenario:** Developers add workspace switching in the UI or ingest multiple tenants into shared tables without introducing server-derived tenant context and row-level authorization.
-
-**Impact:** Cross-tenant plan, evidence, identity, and audit access.
-
-**Recommended fix:** Design tenant identity and membership centrally. Derive workspace from authenticated server context, never request body. Include workspace in every primary/unique/index relationship, query predicate, cache key, rate key, signature, evidence envelope, audit event, and storage object path. Add isolation tests before a second tenant.
-
-**Validation:** Property and integration tests attempt every CRUD/read operation across two workspaces using every role.
-
-**CWE/OWASP:** CWE-639; OWASP A01 Broken Access Control.
-
-### SR-04 — HMAC integrity cannot provide independent attestation or graceful rotation
+### SR-03 — Tenant isolation is implemented; lifecycle governance is incomplete
 
 - **Severity:** Medium
 - **Confidence:** High
-- **Affected:** `lib/security/runtime.ts`, `lib/server/control-plane.ts`
-- **Status:** Accepted prototype limitation; production evidence blocker
+- **Affected:** `lib/security/authorization.ts`, membership administration and identity lifecycle
+- **Type:** Defense-in-depth/operations
 
-**Description:** Plans and evidence use one environment HMAC secret and fixed key ID. Anyone who can verify with the key can also forge. The application has no multi-key verification, revocation history, or external signing service.
+The previous hard-coded workspace defect is remediated: membership derives workspace and role, all records/queries/signatures/audit/rate keys are scoped, and tests prove a second tenant cannot select the first. However, invitations, SCIM deprovisioning, access certification, step-up authentication, emergency access, and tenant-specific signing keys are absent. A stale membership or standing administrator therefore remains plausible.
 
-**Exploitation scenario:** A control-plane compromise obtains the environment secret and creates fraudulent historical-looking packages. Rotation makes old packages unverifiable unless the retired secret is retained.
+Implement enterprise IdP group mapping/SCIM, short session revocation, periodic access review, step-up for key/lifecycle operations, and tenant-specific key policy where required. Validate joiner/mover/leaver and stale-session behavior.
 
-**Impact:** Loss of evidence provenance and plan trust.
+**CWE/OWASP:** CWE-266/CWE-639; OWASP A01/A07.
 
-**Recommended fix:** Use KMS/HSM-backed asymmetric signing. Publish versioned public verification keys, include algorithm/key/protocol versions, support rotation and revocation, and keep the private key non-exportable. The future runner must verify independently.
+### SR-04 — KMS signing is source-complete but not operationally proven
 
-**Validation:** Known-answer vectors, malformed canonicalization tests, key rotation, revoked key, wrong audience/runner, expiry, and replay tests.
+- **Severity:** High production gate
+- **Confidence:** High
+- **Affected:** `lib/security/signing.ts`, `infra/aws-kms-signer/`, Sites bindings
+- **Type:** Operational blocker, not a confirmed code vulnerability
 
-**CWE/OWASP:** CWE-320; OWASP A02 Cryptographic Failures.
+The shared HMAC design is removed. Protocol v2 provides PS256 domains, scope, nonce, expiry, key registry, revocation, and an independent pinned-key verifier. The AWS stack constrains Lambda to one KMS key and secret. Without deployment evidence, however, key custody, alarms, token rotation, public-key pinning, and endpoint reachability are assumptions.
 
-### SR-05 — Audit chain is tamper-evident only within the same database
+Deploy in the explicitly approved account, verify IAM/KMS policies, pin the public JWK through an independent path, run known-answer and abuse tests, rotate key/token, and record alerts. Keep production mode disabled until readiness and independent verification pass.
+
+**CWE/OWASP:** CWE-320; OWASP A02/A05.
+
+### SR-05 — Audit integrity still requires independent anchor custody
 
 - **Severity:** Medium
 - **Confidence:** High
-- **Affected:** `audit_events`, `appendAuditEvent()`
-- **Status:** Defense-in-depth gap
+- **Affected:** `audit_events`, `audit_anchors`, SIEM/archive operations
+- **Type:** Residual risk
 
-**Description:** Events link hashes and prevent silent branch insertion through a unique prior-hash index. A database administrator can still delete or rewrite the entire chain and recompute hashes because no external anchor or asymmetric signature exists.
+D1 mutation/audit commits are atomic, chain branches are constrained, full-history verification is paged, and signed linked anchors exist. A D1 administrator with access to the same public-key registry and unexported anchors can still rewrite everything after the last independently retained anchor or delete local anchors.
 
-**Exploitation scenario:** An attacker with D1 administrative access rewrites both malicious plan records and corresponding audit events.
+Create anchors on schedule and before/after releases/incidents, export them to an independently administered append-only system, alert on chain/head mismatch, and restrict D1 administration. Corruption tests must mutate, delete, reorder, duplicate, branch, and truncate events.
 
-**Impact:** Reduced forensic confidence and repudiation resistance.
+**CWE/OWASP:** CWE-778; OWASP A09.
 
-**Recommended fix:** Automate chain verification; periodically anchor signed chain heads in an independent append-only system; export security events to a separate SIEM/account; restrict database administration; alert on gaps and verification failure.
-
-**Validation:** Mutate, delete, reorder, duplicate, and branch events and ensure verification/monitoring detects each case.
-
-**CWE/OWASP:** CWE-778; OWASP A09 Security Logging and Monitoring Failures.
-
-### SR-06 — CSP permits inline style execution
-
-- **Severity:** Low residual risk
-- **Confidence:** High
-- **Affected:** `worker/index.ts`
-- **Status:** Script execution remediated; inline style compatibility remains
-
-**Description:** Every HTML response now receives a fresh 144-bit nonce. A streaming `HTMLRewriter` applies it to every framework script, `script-src` uses the nonce with `strict-dynamic`, and `script-src-attr 'none'` blocks event-handler attributes. `style-src` still includes `'unsafe-inline'` for current framework styling compatibility.
-
-**Exploitation scenario:** A future HTML injection bug has a larger path to script execution because inline scripts are permitted.
-
-**Impact:** Increased XSS impact, session actions under the victim identity, topology exposure, and plan abuse within the victim role.
-
-**Recommended fix:** Keep the script nonce regression tests. Evaluate style nonces/hashes and Trusted Types after framework compatibility testing without weakening `connect-src`, `object-src`, or `frame-ancestors`.
-
-**Validation:** Integration tests prove nonces are unpredictable, every script receives the matching response nonce, `unsafe-inline` is absent from `script-src`, and script attributes are disabled. Full browser injection coverage remains required before real customer data.
-
-**CWE/OWASP:** CWE-79; OWASP A03 Injection.
-
-### SR-07 — Retention, backup, recovery, and security-event export are undefined
-
-- **Severity:** Medium before real data; Informational now
-- **Confidence:** High
-- **Affected:** D1 operational lifecycle
-- **Status:** Production blocker for real data
-
-**Description:** The schema stores emails, account IDs, plans, audit details, and evidence-export attribution without automated retention, deletion, export, backup, restore testing, or external SIEM integration.
-
-**Exploitation scenario:** Data accumulates indefinitely, cannot be deleted or restored reliably, or disappears during an incident without independent security telemetry.
-
-**Impact:** Privacy, compliance, investigation, and availability failures.
-
-**Recommended fix:** Define data inventory and lawful purpose, table-specific retention, expiry jobs, subject/customer export and deletion, encrypted backups, restore objectives, legal hold, secure destruction, and SIEM export with field minimization.
-
-**Validation:** Automated expiry, deletion, backup, point-in-time restore, audit continuity, and access-control tests.
-
-**CWE/OWASP:** CWE-404/CWE-778; OWASP A09.
-
-### SR-08 — Runtime schema initialization duplicates migrations
+### SR-06 — Inline styles remain permitted by CSP
 
 - **Severity:** Low
 - **Confidence:** High
-- **Affected:** `db/schema.ts`, `drizzle/*.sql`, deployment and local startup
-- **Status:** Remediated; migrations are the only schema and seed authority
+- **Affected:** `worker/index.ts`
+- **Type:** Defense-in-depth
 
-**Description:** Previously, table definitions existed in Drizzle schema, SQL migration, and runtime `CREATE TABLE IF NOT EXISTS` statements. Request-time DDL and seeding have been removed; local startup and integration tests now apply reviewed migrations before traffic is served.
+Scripts receive fresh high-entropy nonces, `strict-dynamic`, and `script-src-attr 'none'`; framing and dangerous object sources are blocked. `style-src 'unsafe-inline'` remains for framework compatibility. A future HTML/CSS injection could manipulate display even without script execution. Evaluate style nonces/hashes and Trusted Types after full browser compatibility testing; retain current script nonce regression tests.
 
-**Exploitation scenario:** A future constraint is added only to migration while local/runtime initialization silently creates a weaker table.
+**CWE/OWASP:** CWE-79; OWASP A03.
 
-**Impact:** Environment-specific security behavior and missing database enforcement.
+### SR-07 — Backup and retention need platform restore evidence
 
-**Recommended fix:** Keep migrations as the only production and local schema authority. Fail deployment or startup when migrations cannot be applied.
-
-**Validation:** Compare `sqlite_master` output for a migrated database and a fresh local database in CI.
-
-**CWE/OWASP:** CWE-16; OWASP A05 Security Misconfiguration.
-
-### SR-09 — Identity lifecycle is static allowlist management
-
-- **Severity:** Informational now; Medium at organizational scale
+- **Severity:** Medium production gate
 - **Confidence:** High
-- **Affected:** environment role lists and operations
-- **Status:** Scale/readiness gap
+- **Affected:** lifecycle/backup APIs, Sites/D1 operations
+- **Type:** Operational blocker
 
-**Description:** Roles are comma-separated environment values. There is no group mapping, SCIM lifecycle, access review workflow, step-up authentication, or delegated workspace administration.
+Legal holds, bounded operational deletion, signed logical archive digests, and public-key-only backups are implemented. The logical export is capped at 4 MB and deliberately is not a platform backup. No production D1 restore has been rehearsed or measured.
 
-**Exploitation scenario:** Departed or transferred personnel remain on an allowlist, or an administrator receives excessive standing privilege.
+Execute the isolated restore runbook, prove encryption/custody, record RPO/RTO, verify manifest and audit head, test legal hold/customer deletion, and destroy the recovery copy securely. Larger tenants require platform-native backup rather than increasing Worker memory limits.
 
-**Impact:** Stale access and weak governance.
+**CWE/OWASP:** CWE-404; OWASP A05/A09.
 
-**Recommended fix:** Use enterprise IdP groups, MFA/step-up requirements, SCIM deprovisioning, least-privilege roles, periodic access certification, and emergency access controls. Preserve server-side capability enforcement.
+### SR-08 — SIEM delivery needs independent collector evidence
 
-**Validation:** Joiner/mover/leaver and group-change tests, stale-session revocation, MFA policy, and access-review evidence.
+- **Severity:** Medium production gate
+- **Confidence:** High
+- **Affected:** `lib/security/telemetry.ts`, collector configuration
+- **Type:** Operational blocker
 
-**CWE/OWASP:** CWE-266; OWASP A01/A07.
+Events are minimized/canonical, exact-endpoint delivered, digested, and queued with bounded retry/backoff. Missing production SIEM configuration fails readiness and queues events. The repository cannot prove the external collector durably accepts, deduplicates, alerts, retains immutably, or rotates credentials.
 
-## 6. Exploitation chains and combined risk
+Run the acceptance cases in `siem-integration.md`, monitor outbox age/depth, export platform logs as a second channel, and keep tokens in platform secrets. Never log bodies or raw identity.
 
-### Direct-origin exposure to administrator impersonation
+**CWE/OWASP:** CWE-778; OWASP A09.
 
-Direct Worker exposure + trusted raw identity header + known administrator email -> application administrator -> signed plan and connector requests. No cloud execution follows today, but future runner connectivity would turn this into a critical chain. The deployment boundary must be enforced before runner work.
+### SR-09 — Future runner remains the dominant critical-risk boundary
 
-### Over-broad topology projection plus compromised browser
+- **Severity:** Critical if enabled without all gates; Informational while absent
+- **Confidence:** High
+- **Affected:** future runner/delivery/workload-identity design
+- **Type:** Deliberately disabled capability
 
-Real data ingested without pagination/field minimization + viewer access or browser compromise -> download the full authorized workspace snapshot -> targeted cloud attack reconnaissance. Purpose-specific authorized queries are required before real ingestion.
+An approved PS256 plan is still non-executable. There is no runner identity, account binding, atomic nonce consumption, module allowlist, workload credential flow, customer kill switch, bounded egress, cleanup proof, or evidence attestation. Treat any code that introduces cloud calls, credentials, command delivery, arbitrary modules, or executable state as a new security architecture requiring independent review.
 
-### Control-plane secret plus database compromise
+Complete every gate in `runner-security-design.md`; do not let a browser, model, general script, or shared credential issue AWS calls.
 
-Signing-secret theft + D1 write access -> forged packages + rewritten local audit chain -> plausible false history. Asymmetric KMS signing, external audit anchoring, and independent monitoring break this chain.
+**CWE/OWASP:** CWE-284/CWE-94; OWASP A01/A03.
 
-### Unsafe runner addition
+### SR-10 — Release provenance exists but must be verified by consumers
 
-Existing plan UI + new AWS SDK/control-plane credentials without runner protocol -> compromised operator/control plane -> arbitrary AWS actions. ADR 0001 and the runner gates explicitly prohibit this path.
+- **Severity:** Low now; High for distributed runner artifacts
+- **Confidence:** High
+- **Affected:** `.github/workflows/`, release operations
+- **Type:** Supply-chain residual risk
+
+Actions are SHA-pinned, CodeQL/Dependabot/audits run, and tagged workflows generate deterministic artifacts, CycloneDX SBOMs, and GitHub attestations. Attestation generation alone does not prevent substitution if deployers never verify it. Require `gh attestation verify` against the expected repository/commit before deployment and retain the result. Keep build-only audit exceptions narrow, expiring, and bundle-reachability tested.
+
+**CWE/OWASP:** CWE-494; OWASP A08.
+
+## 6. Exploitation chains and combined-risk scenarios
+
+- **Direct origin + static admin email:** dispatcher bypass could turn header forgery into privileged control-plane access. Private routing is mandatory.
+- **D1 compromise + unexported anchors:** an attacker rewrites plans, public-key registry, and the entire local audit chain. Independently retained signed anchors bound the detectable cutoff.
+- **Signer token theft + missing monitoring:** the attacker uses the constrained oracle to sign arbitrary envelopes. Domain/scope do not help if the control plane constructs them; rate limits, alarm delivery, token revocation, and KMS audit are required.
+- **SIEM outage + D1 compromise:** queued events could be deleted before delivery. Platform logs and separately administered outbox monitoring provide a second channel.
+- **Future runner + replay gap:** a valid approved plan could execute twice unless the runner atomically checks and consumes the nonce before any action.
 
 ## 7. Dependency and configuration risks
 
-- The production dependency audit reports zero known vulnerabilities at the current validation. The full development audit reports two high-severity infinite-loop advisories in `image-size@2.0.2`, introduced only through the Vinext build tool. Upstream lists no patched `image-size` release as of August 11, 2026. The package is not imported by application code or included in `dist/server`. A tested Vinext 0.0.45 downgrade removed the dependency but crashed the built Worker during stateful API traffic, so it was rejected. Treat repository image inputs as untrusted, keep the package out of the deployed artifact, monitor upstream, and upgrade as soon as Vinext can remove or patch it.
-- The lockfile is required. Do not publish installs produced without it.
-- CI actions are pinned to full SHAs and use read-only repository permissions.
-- Package install scripts remain a supply-chain execution surface; use trusted registries, review lockfile diffs, preserve provenance/SBOMs, and consider a package-install allowlist.
-- `PUBLIC_APP_ORIGIN` is validated as an absolute HTTP(S) origin, eliminating Host-derived metadata.
-- Hosted configuration must omit local mode and protect the signing secret.
-- Local Wrangler includes development tooling and is not a public server.
+Production dependencies must remain free of High/Critical advisories. Build-only exceptions are documented, time-bounded, and guarded from entering the Worker bundle. GitHub Actions are commit-pinned. Production configuration must exclude local/ephemeral mode and include HTTPS origin, D1, external signer/token/key/JWK, SIEM/token, private Sites access, and production mode. The readiness endpoint checks runtime presence/shape but cannot prove external ownership or alert delivery.
 
 ## 8. Secure design gaps
 
-- Real AWS discovery, dynamic path calculation, and cloud execution do not exist.
-- Workspace scoping exists, but multi-organization identity, keys, lifecycle, and isolation tests do not.
-- Two-person control-plane approval exists; step-up authentication, nonces, and runner-bound asymmetric authorization do not.
-- No asymmetric signing, replay nonce store, verifier protocol, or key revocation exists.
-- D1 snapshot ingestion exists for the demo seed; real collector ingestion and server-side pagination do not.
-- No retention, customer deletion/export, backup/restore, SIEM, or external audit anchor exists.
-- No SSO group/SCIM/step-up administration exists beyond Sites identity and environment lists.
-- No independent security assessment or production compliance evidence exists.
+- No self-service tenant lifecycle, SCIM, step-up, or periodic access certification.
+- No paginated/purpose-minimized real-topology API.
+- No platform restore evidence or automated customer-record deletion workflow.
+- No independently retained production anchor or SIEM acceptance evidence yet.
+- No customer-hosted collector/runner or safe execution protocol implementation.
+- No independent application/cloud/supply-chain assessment.
 
-## 9. Remediation roadmap
+## 9. Recommended remediation roadmap
 
-### Phase 0 — Maintain current safety floor
-
-- Keep the repository private or appropriately licensed and reviewed before public distribution.
-- Keep live AWS execution absent.
-- Enforce private Sites access and role allowlists.
-- Run all release gates and remediate future advisories.
-
-### Phase 1 — Real control-plane readiness
-
-- Complete server-derived tenant/workspace identity and multi-tenant negative tests; the demo catalog is already server-owned.
-- Add paginated authorized APIs and isolation tests.
-- Implement automated audit verification, external anchoring, SIEM export, retention, backups, and restore exercises.
-- Replace static role lists with governed IdP groups and lifecycle controls.
-- Deploy nonce/hash-based CSP hardening.
-
-### Phase 2 — Cryptographic and approval protocol
-
-- Adopt KMS-backed asymmetric signing and versioned canonical protocol.
-- Implement two-person approval, step-up authentication, expiry, one-time nonces, revocation, and state-machine concurrency.
-- Build independent verifiers and protocol fuzz/property tests.
-
-### Phase 3 — Customer-hosted runner
-
-- Implement every mandatory control in `runner-security-design.md`.
-- Validate in isolated synthetic AWS organizations with budget, SCP, permission-boundary, tag, egress, and kill-switch controls.
-- Complete independent application, protocol, runner, AWS, and supply-chain penetration tests.
-
-### Phase 4 — Limited production pilot
-
-- Explicit customer authorization and account ownership proof.
-- Restricted modules/canary accounts only.
-- Continuous monitoring, incident exercises, evidence verification, support and vulnerability processes.
-- Formal go/no-go review for every expansion of AWS permissions or target classes.
+1. Provision/evidence KMS and SIEM in approved external accounts; make readiness pass.
+2. Run isolated backup/restore, anchor export, SIEM outage/retry, key/token rotation, and tagged-attestation verification exercises.
+3. Obtain independent review and resolve its findings before real tenant data.
+4. Add enterprise identity lifecycle and paginated topology minimization.
+5. Build a customer-hosted read-only collector first; keep active execution disabled.
+6. Only then implement the independently reviewed runner protocol and synthetic-canary exercises.
 
 ## 10. Security test plan
 
-### Automated now
+Automated gates cover authentication, role denial, tenant selection, CSRF, body limits, CSP, plan signing, tampering, downgrade, wrong scope/audience, expiry, replay, revoked keys, approval separation/races, atomic audit, connector secret non-retention, evidence redaction, remediation authority, non-executable runner/discovery, anchors, backup manifests, legal holds, readiness, and telemetry minimization.
 
-Current tests cover identity redirect, authorized rendering, response headers, direct-origin rejection, CSRF, body-stream limits, plan signing/non-execution, approval separation and concurrent decisions, governed remediation transitions, guardrail protection, RBAC, connector secret handling, non-executable discovery, evidence manifests, pending runner enrollment, signed reports, and audit verification. Artifact and dependency gates cover stale files, listener binding, hardening presence, and advisories.
-
-### Add before real data
-
-- Two-workspace authorization matrix and identifier tampering.
-- Query pagination/limits and response field minimization.
-- Audit-chain verifier and corruption cases.
-- Retention, deletion, backup, restore, and personal-data export.
-- Load, concurrency, race, and rate-limit boundary tests.
-- CSP browser tests without unsafe inline execution.
-- Secret-scanning and build-provenance verification.
-
-### Add before runner
-
-- Signature/canonicalization known-answer and fuzz tests.
-- Nonce replay, expiry, wrong audience/account/runner, revoked key, and downgrade tests.
-- Module allowlist and IAM policy negative testing.
-- SSRF/egress, metadata, DNS rebinding, redirect, and certificate tests.
-- Container/process sandbox escape and resource exhaustion tests.
-- Cleanup failure, kill switch, control-plane outage, and evidence upload failure.
-- Malicious update, rollback, dependency, and signing compromise simulations.
-- Independent manual adversarial assessment.
+Operational tests must cover forged headers on every hostname; KMS IAM/key policy and CloudTrail; signer auth/rate/rotation/alarms; SIEM outage/retry/dedup/alerts/retention; D1 corruption and external anchor comparison; backup/restore RPO/RTO; tagged attestation verification; load/volumetric abuse; browser injection; privacy review; and independent penetration testing.
 
 ## 11. Open questions and assumptions
 
-- Will the long-term hosting path always guarantee an unbypassable trusted identity dispatcher?
-- Is the product single-tenant per deployment or multi-tenant SaaS?
-- Which IdP, MFA, SCIM, and access-review requirements apply?
-- What data classes, jurisdictions, retention periods, and evidence obligations apply?
-- Who owns the signing keys, runner workload identity, and emergency kill switch?
-- Which AWS accounts, partitions, regions, services, modules, resources, tags, and operations may ever be validated?
-- What explicit customer authorization artifact is required before each plan?
-- What are the recovery objectives, backup custody, SIEM, and incident-notification requirements?
-- Which independent assessor and launch criteria will approve the first runner pilot?
-
-Assumptions for this review: the exposure snapshot and generated attack-path evidence remain synthetic; access remains local or private Sites; the Sites dispatcher is trusted; pending runner enrollment has no communication channel or cloud credentials; and no other services write the D1 records.
-
-## Remediated findings from the prototype baseline
-
-The following previously confirmed issues are fixed in the current working tree:
-
-- missing application authentication/RBAC;
-- client-only validation approval and execution simulation;
-- forgeable localStorage run history and browser-authoritative validation evidence;
-- known dependency advisories present in the earlier lockfile;
-- missing primary response security headers;
-- local service bound to all interfaces;
-- stale files surviving into deployment artifacts;
-- Host-derived social metadata;
-- absence of application rate limits on primary stateful operations;
-- unsafe dormant example API code.
-
-Regression tests and artifact checks must remain in place so these controls do not silently regress.
+- Which AWS account/region and security-operations SNS topic own the production KMS signer?
+- Which independently administered SIEM implements `/v1/events`, and what are its retention/alert SLAs?
+- What contractual RPO/RTO, evidence retention, data residency, legal hold, and deletion requirements apply?
+- Which IdP groups, MFA/step-up policy, and SCIM source own membership lifecycle?
+- Who retains trusted public keysets and signed audit anchors outside CloudPen?
+- Which independent assessor will approve the app, external infrastructure, supply chain, and any future runner?
+- Private Sites routing and identity-header stripping are assumed to operate as documented; alternate direct origins are unsupported.

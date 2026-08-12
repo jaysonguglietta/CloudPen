@@ -2,7 +2,8 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { AUTHENTICATED_USER_EMAIL_HEADER, LOCAL_IDENTITY_VERIFIED_HEADER } from "../lib/security/headers";
-import { configuredOrigin, installRuntimeBindings, roleForEmail, type RuntimeBindings } from "../lib/security/runtime";
+import { configuredOrigin, installRuntimeBindings, productionRuntimeProblems, roleForEmail, type RuntimeBindings } from "../lib/security/runtime";
+import { emitSecurityEvent } from "../lib/security/telemetry";
 
 interface Env extends RuntimeBindings {
   ASSETS: Fetcher;
@@ -34,8 +35,18 @@ const worker = {
     installRuntimeBindings(env);
     const prepared = prepareTrustedRequest(request, env, requestId);
     let response: Response;
+    const requestPath = new URL(request.url).pathname;
+    const configurationDenied = env.CLOUDPEN_PRODUCTION_MODE === "1"
+      && requestPath !== "/api/admin/readiness"
+      && requestPath !== "/access-denied"
+      && productionRuntimeProblems(env).length > 0;
 
-    if (prepared instanceof Response) {
+    if (configurationDenied) {
+      response = new Response("Production configuration is incomplete.", {
+        status: 503,
+        headers: { "x-cloudpen-security-event": "production_configuration_denied" },
+      });
+    } else if (prepared instanceof Response) {
       response = prepared;
     } else {
       const url = new URL(prepared.url);
@@ -168,8 +179,9 @@ async function emitRequestTelemetry(
   const url = new URL(request.url);
   const email = request.headers.get(AUTHENTICATED_USER_EMAIL_HEADER)?.trim().toLowerCase() ?? null;
   const actorId = email ? (await sha256Text(email)).slice(0, 16) : null;
-  console.log(JSON.stringify({
+  await emitSecurityEvent({
     schema: "cloudpen.security-event.v1",
+    eventId: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     requestId,
     category,
@@ -182,7 +194,7 @@ async function emitRequestTelemetry(
     capability: capabilityFor(request.method, url.pathname),
     durationMs,
     localMode: env.CLOUDPEN_LOCAL_MODE === "1",
-  }));
+  }, env);
 }
 
 function categoryForStatus(status: number): string {

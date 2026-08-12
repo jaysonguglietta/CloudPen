@@ -1,0 +1,204 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CloudPen isolated PS256 signer backed by a non-exportable AWS KMS key
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedPattern: "^[a-z0-9-]{3,32}$"
+  AlarmTopicArn:
+    Type: String
+    Description: SNS topic ARN monitored by the production security operations team
+    AllowedPattern: "^arn:[a-z0-9-]+:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$"
+
+Resources:
+  SigningKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub CloudPen ${EnvironmentName} artifact signing key
+      Enabled: true
+      EnableKeyRotation: false
+      KeySpec: RSA_3072
+      KeyUsage: SIGN_VERIFY
+      MultiRegion: false
+      PendingWindowInDays: 30
+      Tags:
+        - { Key: Application, Value: CloudPen }
+        - { Key: Environment, Value: !Ref EnvironmentName }
+
+  SigningKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/cloudpen-${EnvironmentName}-artifact-signing
+      TargetKeyId: !Ref SigningKey
+
+  SignerToken:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub CloudPen ${EnvironmentName} signer bearer credential
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+      Tags:
+        - { Key: Application, Value: CloudPen }
+
+  SignerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Validates CloudPen signing protocol requests and calls KMS Sign
+      Runtime: python3.13
+      Architectures: [arm64]
+      Handler: handler.lambda_handler
+      CodeUri: src/
+      MemorySize: 256
+      Timeout: 5
+      ReservedConcurrentExecutions: 5
+      Tracing: Active
+      Environment:
+        Variables:
+          KMS_KEY_ID: !GetAtt SigningKey.Arn
+          EXPECTED_KEY_ID: !GetAtt SigningKey.Arn
+          SIGNER_TOKEN_SECRET_ARN: !Ref SignerToken
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Sid: SignOnly
+              Effect: Allow
+              Action: kms:Sign
+              Resource: !GetAtt SigningKey.Arn
+            - Sid: ReadSignerCredential
+              Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref SignerToken
+
+  SignerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${SignerFunction}
+      RetentionInDays: 90
+
+  SignerApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub cloudpen-${EnvironmentName}-signer
+      ProtocolType: HTTP
+
+  SignerIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref SignerApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt SignerFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 5000
+
+  SignerRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref SignerApi
+      RouteKey: POST /v1/sign
+      Target: !Sub integrations/${SignerIntegration}
+
+  SignerStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref SignerApi
+      StageName: $default
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","routeKey":"$context.routeKey","status":"$context.status","responseLatency":"$context.responseLatency","integrationError":"$context.integrationErrorMessage"}'
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/cloudpen-${EnvironmentName}-signer
+      RetentionInDays: 90
+
+  SignerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SignerFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${SignerApi}/*/POST/v1/sign
+
+  SignerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen signer Lambda errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SignerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+  SignerApiServerErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen signer API server errors
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - { Name: ApiId, Value: !Ref SignerApi }
+        - { Name: Stage, Value: $default }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+  SignerApiClientErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CloudPen signer API authentication or malformed-request burst
+      Namespace: AWS/ApiGateway
+      MetricName: 4xx
+      Dimensions:
+        - { Name: ApiId, Value: !Ref SignerApi }
+        - { Name: Stage, Value: $default }
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+
+Outputs:
+  SignerUrl:
+    Description: Configure as CLOUDPEN_SIGNER_URL
+    Value: !Sub https://${SignerApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/v1/sign
+  SigningKeyId:
+    Description: Configure as CLOUDPEN_SIGNING_KEY_ID
+    Value: !GetAtt SigningKey.Arn
+  SignerTokenSecretArn:
+    Description: Retrieve under controlled operator access and configure as CLOUDPEN_SIGNER_TOKEN
+    Value: !Ref SignerToken
+  SigningKeyArn:
+    Value: !GetAtt SigningKey.Arn
