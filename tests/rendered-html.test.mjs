@@ -31,6 +31,18 @@ before(async () => {
     encoding: "utf8",
   });
   assert.equal(migration.status, 0, `${migration.stdout ?? ""}\n${migration.stderr ?? ""}`);
+  const fixture = spawnSync("./node_modules/.bin/wrangler", [
+    "d1", "execute", "site-creator-d1",
+    "--local",
+    "--config", "dist/server/wrangler.json",
+    "--persist-to", stateDirectory,
+    "--command", "UPDATE exposure_paths SET data_json = json_set(data_json, '$.evidence[0]', 'Authorization: Bearer test-secret-token-value') WHERE id = 'northstar-labs:CP-1024'",
+  ], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, WRANGLER_LOG_PATH: join(stateDirectory, "fixture.log") },
+    encoding: "utf8",
+  });
+  assert.equal(fixture.status, 0, `${fixture.stdout ?? ""}\n${fixture.stderr ?? ""}`);
   server = spawn("./node_modules/.bin/wrangler", [
     "dev",
     "--config", "dist/server/wrangler.json",
@@ -106,6 +118,24 @@ test("server-renders the authorized CloudPen application shell", async () => {
   assert.match(html, /Runner disabled/);
   assert.match(html, /Security Administrator/);
   assert.doesNotMatch(html, /codex-preview/);
+});
+
+test("nonces every script and blocks inline script attributes", async () => {
+  const first = await render();
+  const policy = first.headers.get("content-security-policy") ?? "";
+  const nonce = policy.match(/script-src 'nonce-([^']+)' 'strict-dynamic'/)?.[1];
+  assert.ok(nonce);
+  assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
+  assert.match(policy, /script-src-attr 'none'/);
+  const html = await first.text();
+  const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((match) => match[0]);
+  assert.ok(scripts.length > 0);
+  assert.ok(scripts.every((script) => script.includes(`nonce="${nonce}"`)));
+
+  const secondPolicy = (await render()).headers.get("content-security-policy") ?? "";
+  const secondNonce = secondPolicy.match(/script-src 'nonce-([^']+)' 'strict-dynamic'/)?.[1];
+  assert.ok(secondNonce);
+  assert.notEqual(secondNonce, nonce);
 });
 
 test("includes accessible navigation and controls", async () => {
@@ -213,7 +243,14 @@ test("returns explicit demo provenance and authoritative empty workflow records"
 });
 
 test("persists connector records without returning the raw external ID", async () => {
-  const externalId = "northstar-integration-secret-value";
+  const weak = await fetch(`${origin}/api/connectors`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ name: "Weak connector", accountId: "111111111111", externalId: "predictable-external-id" }),
+  });
+  assert.equal(weak.status, 400);
+
+  const externalId = "cpv1_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
   const response = await fetch(`${origin}/api/connectors`, {
     method: "POST",
     headers: { ...identityHeaders, "content-type": "application/json", origin },
@@ -228,8 +265,9 @@ test("persists connector records without returning the raw external ID", async (
   const snapshot = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).json();
   assert.equal(snapshot.connectors.length, 1);
   assert.equal(snapshot.connectors[0].accountId, "123456789012");
-  assert.equal(snapshot.connectors[0].externalIdHint, "••••alue");
+  assert.equal(snapshot.connectors[0].externalIdStatus, "not-retained");
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(externalId));
+  assert.doesNotMatch(JSON.stringify(snapshot.audit), /externalIdDigest|external_id_digest/i);
 
   const discovery = await fetch(`${origin}/api/connectors/${created.id}/discovery`, {
     method: "POST",
@@ -240,6 +278,17 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(discovery.status, 202);
   assert.equal(discoveryBody.status, "Runner required");
   assert.equal(discoveryBody.scope.executable, false);
+
+  const rotatedExternalId = "cpv1_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg";
+  const rotation = await fetch(`${origin}/api/connectors/${created.id}/external-id`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ externalId: rotatedExternalId }),
+  });
+  assert.equal(rotation.status, 200);
+  const afterRotation = await (await fetch(`${origin}/api/control-plane`, { headers: identityHeaders })).text();
+  assert.doesNotMatch(afterRotation, new RegExp(rotatedExternalId));
+  assert.doesNotMatch(afterRotation, /externalIdDigest|external_id_digest/i);
 });
 
 test("enforces separation of duties for active-plan approval", async () => {
@@ -306,7 +355,7 @@ test("creates retained evidence manifests and tracked remediation", async () => 
   const evidenceBody = await evidence.json();
   assert.equal(evidence.status, 200);
   assert.match(evidenceBody.packageId, /^EV-[A-Z0-9]{8}$/);
-  assert.equal(evidenceBody.payload.redaction.credentials, "removed");
+  assert.equal(evidenceBody.payload.redaction.applied, true);
 
   const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
   const remediation = await fetch(`${origin}/api/remediations`, {
@@ -440,6 +489,9 @@ test("enforces remediation authority and evidence-gated reviewer closure", async
   });
   const evidenceBody = await evidence.json();
   assert.equal(evidence.status, 200);
+  assert.equal(evidenceBody.payload.redaction.redactedValues, 1);
+  assert.doesNotMatch(JSON.stringify(evidenceBody), /test-secret-token-value/);
+  assert.match(JSON.stringify(evidenceBody), /REDACTED_TOKEN/);
   const reviewerClose = await fetch(`${origin}/api/remediations/${closeRecord.remediation.id}`, {
     method: "PATCH", headers: { ...reviewerHeaders, "content-type": "application/json", origin },
     body: JSON.stringify({ status: "Closed", version: 3, reason: "Independent signed revalidation confirms the path is mitigated", revalidationEvidenceId: evidenceBody.packageId }),
@@ -484,5 +536,22 @@ test("exports a signed assessment with provenance and no execution authority", a
   assert.equal(body.payload.assurance.executable, false);
   assert.equal(body.payload.assurance.auditChainValid, true);
   assert.match(body.integrity.signature, /^[A-Za-z0-9_-]{43}$/);
+});
+
+test("emits correlated structured telemetry without request bodies or secrets", async () => {
+  const marker = "log-injection-marker\\nforged-event";
+  const response = await fetch(`${origin}/api/connectors`, {
+    method: "POST",
+    headers: { ...identityHeaders, "content-type": "application/json", origin },
+    body: JSON.stringify({ name: marker, accountId: "not-an-account", externalId: "not-a-secret" }),
+  });
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.match(output, /cloudpen\.security-event\.v1/);
+  assert.match(output, /request_validation_denied/);
+  assert.match(output, /"route":"\/api\/connectors"/);
+  assert.doesNotMatch(output, /log-injection-marker|forged-event|test-secret-token-value/);
+  assert.doesNotMatch(output, /cpv1_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq/);
 });
 });

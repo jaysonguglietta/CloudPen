@@ -12,8 +12,10 @@ export async function POST(request: Request) {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId : "";
     const externalId = typeof body.externalId === "string" ? body.externalId.trim() : "";
-    if (name.length < 2 || name.length > 80 || !/^\d{12}$/.test(accountId) || !/^[A-Za-z0-9+=,.@:_/-]{8,128}$/.test(externalId)) {
-      return Response.json({ error: "Connector fields do not meet the required format." }, { status: 400 });
+    const externalIdPayload = externalId.startsWith("cpv1_") ? externalId.slice(5) : "";
+    if (name.length < 2 || name.length > 80 || !/^\d{12}$/.test(accountId) ||
+        !/^[A-Za-z0-9_-]{43}$/.test(externalIdPayload) || new Set(externalIdPayload).size < 12) {
+      return Response.json({ error: "Use a CloudPen-generated 256-bit External ID." }, { status: 400 });
     }
     const result = await recordConnectorRequest(user, { name, accountId, externalId });
     return Response.json(result, { status: 202, headers: { "cache-control": "no-store" } });

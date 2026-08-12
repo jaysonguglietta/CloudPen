@@ -9,7 +9,7 @@ This document tracks the implementation sequence without confusing administrativ
 - Server-owned D1 exposure snapshots for accounts, assets, paths, and graph edges.
 - Signed validation plans with expiry, detail receipts, cancel, approve, and reject transitions.
 - Separation of duties: a requester cannot approve or reject their own active plan.
-- Durable AWS connector records that retain only an External ID digest and hint.
+- Durable AWS connector records with browser-generated 256-bit External IDs that are validated, never retained, and explicitly rotatable.
 - Non-executable metadata-read-only discovery plans.
 - Evidence manifests, signed evidence downloads, audit-chain viewer, and chain verification.
 - Owned, due-dated remediation records with risk acceptance and revalidation states.

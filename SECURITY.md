@@ -13,6 +13,10 @@ CloudPen is a security-validation control plane. It does not currently execute A
 - Audit events form an append-only hash chain in D1.
 - Security-relevant mutations and audit events commit atomically; plan decisions and remediation changes use compare-and-set concurrency controls.
 - Remediation risk acceptance is administrator-only and expiring; closure requires signed evidence for the same attack path and reviewer/administrator authority.
+- AWS External IDs are generated from 256 random bits in the browser, validated server-side, and discarded without storing raw values, hints, or reusable digests. Rotation is audited without retaining the replacement value.
+- Evidence exports pass through an explicit fail-closed credential, token, private-key, and URL-credential sanitizer before signing.
+- HTML scripts receive fresh per-response CSP nonces; inline script attributes and non-nonced scripts are blocked.
+- The trusted entry point emits correlated, structured, privacy-minimized security events suitable for export to an independently controlled SIEM.
 - Production safety controls cannot be disabled through the API.
 - Security headers, clean build outputs, dependency auditing, tests, and CI gates are enforced.
 

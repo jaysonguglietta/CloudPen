@@ -103,7 +103,7 @@ Stores server-issued plans and integrity data. Control-plane transitions include
 
 ### Connector and workflow tables
 
-- `connectors` retains AWS account identity, External ID digest/hint, owner, status, and synchronization state without storing credentials or the raw External ID.
+- `connectors` retains AWS account identity, owner, status, synchronization state, and the explicit marker `external_id_status = not-retained`. External IDs and reusable derivatives are absent from the current control-plane schema.
 - `evidence_packages` retains signed-manifest metadata while the exported evidence body remains ephemeral.
 - `remediations` tracks owner, due date, severity, guidance, optimistic-concurrency version, transition reason, accountable risk acceptance/expiry, revalidation evidence, and a server-governed workflow. A partial unique index permits at most one non-closed remediation per workspace/path.
 - `discovery_jobs` stores read-only AWS metadata scope with a database check forcing `executable = 0`.
@@ -135,7 +135,7 @@ Security-relevant state changes and their hash-chained audit rows commit in one 
 | --- | --- | --- |
 | User email and display name | Internal personal data | Server-derived; email persisted for attribution |
 | AWS account ID in connector audit | Confidential tenant metadata | Accepted only after validation; stored in audit details |
-| External ID | Confidential authentication context | Never stored; only SHA-256 digest is logged |
+| External ID | Confidential confused-deputy context | Browser-generated from 256 random bits; validated then discarded with no raw value, hint, or digest logged |
 | Signing key | Secret | Environment secret only; never stored in D1 or returned |
 | Plan digest and HMAC | Integrity metadata | Stored and returned in plan receipt |
 | Evidence observations | Synthetic confidential sample | Returned in a signed, non-cacheable download |

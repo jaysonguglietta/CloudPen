@@ -66,7 +66,13 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
 
 export function safeApiError(error: unknown): Response {
   if (error instanceof RequestSecurityError) {
-    return Response.json({ error: error.message }, { status: error.status });
+    const category = error.status === 413 ? "body_size_denied"
+      : error.status === 403 ? "cross_origin_denied"
+      : "request_validation_denied";
+    return Response.json({ error: error.message }, {
+      status: error.status,
+      headers: { "x-cloudpen-security-event": category },
+    });
   }
   const candidateStatus = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
   const status = [400, 401, 403, 404, 409, 413, 415, 429].includes(candidateStatus) ? candidateStatus : 500;
@@ -75,5 +81,13 @@ export function safeApiError(error: unknown): Response {
     name: error instanceof Error ? error.name : "UnknownError",
     status,
   });
-  return Response.json({ error: message }, { status });
+  const category = status === 429 ? "rate_limit_denied"
+    : status === 409 ? "state_conflict"
+    : status === 401 || status === 403 ? "authorization_denied"
+    : status >= 500 ? "internal_failure"
+    : "request_validation_denied";
+  return Response.json({ error: message }, {
+    status,
+    headers: { "x-cloudpen-security-event": category },
+  });
 }
