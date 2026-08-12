@@ -42,7 +42,22 @@ assert.doesNotMatch(
 
 const releaseWorkflow = await readFile(".github/workflows/release-provenance.yml", "utf8");
 assert.match(releaseWorkflow, /attestations: write/, "release provenance workflow lacks attestation permission");
+assert.match(
+  releaseWorkflow,
+  /actions\/attest-build-provenance@[0-9a-f]{40}/,
+  "release workflow must create a separately verifiable SLSA build-provenance statement",
+);
 assert.match(releaseWorkflow, /sbom-path:/, "release provenance workflow must attest the SBOM");
+assert.match(
+  releaseWorkflow,
+  /steps\.provenance\.outputs\.bundle-path/,
+  "release workflow must retain the build-provenance bundle for offline verification",
+);
+assert.match(
+  releaseWorkflow,
+  /steps\.sbom\.outputs\.bundle-path/,
+  "release workflow must retain the SBOM-attestation bundle for offline verification",
+);
 assert.doesNotMatch(
   releaseWorkflow,
   /uses:\s+[^\s@]+@(?![0-9a-f]{40}(?:\s|$))[^\s]+/m,
