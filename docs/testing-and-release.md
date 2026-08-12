@@ -53,6 +53,8 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 
 `.github/workflows/security.yml` runs on pull requests and pushes to `main`. It uses read-only repository permissions, cancels superseded runs, limits execution time, pins GitHub Actions to full commit SHAs, installs from the lockfile, audits dependencies, and runs lint, type checking, documentation-link checks, tests, and artifact checks.
 
+`.github/workflows/codeql.yml` performs JavaScript/TypeScript CodeQL analysis on pull requests, pushes to `main`, and a weekly schedule. Its actions are pinned to immutable commit SHAs, its default permissions are read-only, and only the analysis job receives `security-events: write` so results can reach GitHub code scanning. Dependabot monitors both npm and GitHub Actions dependencies; repository vulnerability alerts and automatic security updates must remain enabled.
+
 ## Manual release review
 
 Automation does not replace review. Before a hosted release, confirm:

@@ -6,6 +6,28 @@ All notable changes are documented here. CloudPen has not reached a stable publi
 
 No changes yet.
 
+## 0.2.0-rc.2 — 2026-08-12
+
+> Synthetic/private evaluation prerelease. CloudPen remains a non-executable control plane and is not approved for production tenants, real customer data, or active cloud testing.
+
+### Changed
+
+- Upgraded Next.js, Tailwind CSS, TypeScript, React type definitions, ESLint React tooling, Vinext, and the pinned GitHub checkout/setup-node actions.
+- Restarted the local Miniflare Worker between connector mutation phases while preserving isolated D1 state, removing nondeterministic CI connection loss.
+- Hardened integration-process shutdown by escalating to `SIGKILL` only when a Worker ignores the bounded graceful-stop window.
+
+### Security
+
+- Added pinned CodeQL JavaScript/TypeScript analysis for pull requests, `main`, and a weekly scheduled scan.
+- Added executable release checks that require CodeQL publication permission, JavaScript/TypeScript coverage, immutable action pins, and npm/GitHub Actions Dependabot coverage.
+- Enabled GitHub Dependabot vulnerability alerts and automatic security updates at the repository level.
+- Preserved secret scanning and push protection; expanded non-provider patterns and validity checks remain unavailable in the current repository feature set.
+
+### Release status
+
+- All pull requests open at the start of this release cycle were repaired, passed the protected `verify` gate, and merged.
+- Production rollout remains blocked on KMS/HSM-backed asymmetric signing, independently administered SIEM delivery, retention and recovery validation, tenant-isolation design, and independent runner assessment.
+
 ## 0.2.0-rc.1 — 2026-08-11
 
 > Synthetic/private evaluation prerelease. CloudPen remains a non-executable control plane: it does not connect to AWS APIs, hold cloud credentials, or authorize a runner. It is not approved for production tenants or real customer data.

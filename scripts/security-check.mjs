@@ -26,4 +26,17 @@ assert.match(localStart, /"--ip", "127\.0\.0\.1"/, "local server must bind to lo
 assert.doesNotMatch(localStart, /0\.0\.0\.0/, "local server must not bind to every interface");
 assert.match(localStart, /"d1", "migrations", "apply"/, "local startup must apply D1 migrations before serving traffic");
 
+const codeqlWorkflow = await readFile(".github/workflows/codeql.yml", "utf8");
+assert.match(codeqlWorkflow, /security-events: write/, "CodeQL must be able to publish analysis results");
+assert.match(codeqlWorkflow, /languages: javascript-typescript/, "CodeQL must scan JavaScript and TypeScript");
+assert.doesNotMatch(
+  codeqlWorkflow,
+  /uses:\s+[^\s@]+@(?![0-9a-f]{40}(?:\s|$))[^\s]+/m,
+  "CodeQL workflow actions must be pinned to full commit SHAs",
+);
+
+const dependabot = await readFile(".github/dependabot.yml", "utf8");
+assert.match(dependabot, /package-ecosystem: npm/, "Dependabot must monitor npm dependencies");
+assert.match(dependabot, /package-ecosystem: github-actions/, "Dependabot must monitor GitHub Actions");
+
 console.log("Security artifact checks passed.");
