@@ -63,12 +63,19 @@ async function startServer() {
 }
 
 async function stopServer() {
-  if (!server || server.killed) return;
-  server.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => server.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  const child = server;
+  server = undefined;
+  if (!child || child.exitCode !== null) return;
+
+  child.kill("SIGTERM");
+  const exited = await Promise.race([
+    new Promise((resolve) => child.once("exit", () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
   ]);
+  if (!exited && child.exitCode === null) {
+    child.kill("SIGKILL");
+    await new Promise((resolve) => child.once("exit", resolve));
+  }
 }
 
 describe("CloudPen built Worker", { concurrency: false }, () => {
