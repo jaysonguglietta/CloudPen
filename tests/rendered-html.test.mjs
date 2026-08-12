@@ -153,7 +153,7 @@ test("nonces every script and blocks inline script attributes", async () => {
   assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
   assert.match(policy, /script-src-attr 'none'/);
   const html = await first.text();
-  const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map((match) => match[0]);
+  const scripts = [...html.matchAll(/<script\b[^>]*>/gi)].map((match) => match[0]);
   assert.ok(scripts.length > 0);
   assert.ok(scripts.every((script) => script.includes(`nonce="${nonce}"`)));
 
