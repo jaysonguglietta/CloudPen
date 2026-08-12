@@ -289,6 +289,10 @@ test("persists connector records without returning the raw external ID", async (
   assert.equal(discoveryBody.status, "Runner required");
   assert.equal(discoveryBody.scope.executable, false);
 
+  // Miniflare can drop its local D1 connection when distinct batch mutations
+  // are issued in the same event-loop turn on constrained CI runners.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
   const rotatedExternalId = "cpv1_1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefg";
   const rotation = await request(`${origin}/api/connectors/${created.id}/external-id`, {
     method: "POST",
