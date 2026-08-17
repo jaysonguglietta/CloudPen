@@ -482,25 +482,35 @@ export async function decideValidationRun(
   await ensureSigningKey(db, signedApproval, workspaceId, user.email);
   const allowedStatuses = decision === "cancel" ? ["Planned", "Awaiting approval", "Approved"] : ["Awaiting approval"];
   const placeholders = allowedStatuses.map(() => "?").join(", ");
-  const result = await runAuditedMutation(db, workspaceId, () => [
-    db.prepare(`UPDATE validation_runs
-      SET status = ?, approved_by = ?, decision_reason = ?, approval_id = ?, version = version + 1, updated_at = ?
-      WHERE id = ? AND workspace_id = ? AND status IN (${placeholders}) AND version = ? AND expires_at > ?`)
-      .bind(status, decision === "cancel" ? null : user.email, reason, approvalId, now, runId, workspaceId, ...allowedStatuses, row.version, now),
-    db.prepare(`INSERT INTO approval_envelopes
-      (id, workspace_id, run_id, plan_digest, decision, payload_json, envelope_json, signature, key_id, nonce, created_by, created_at)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1`)
-      .bind(approvalId, workspaceId, runId, row.authorization_digest, decision, canonicalJson(approvalPayload),
-        canonicalJson(signedApproval.envelope), signedApproval.signature, signedApproval.envelope.keyId,
-        signedApproval.envelope.nonce, user.email, now),
-  ], user.email, `validation.plan.${decision}d`, runId, {
-    approvalId,
-    planDigest: row.authorization_digest,
-    status,
-    reason,
-    decisionNonce: signedApproval.envelope.nonce,
-    executable: false,
-  });
+  let result: D1Result;
+  try {
+    result = await runAuditedMutation(db, workspaceId, () => [
+      db.prepare(`UPDATE validation_runs
+        SET status = ?, approved_by = ?, decision_reason = ?, approval_id = ?, version = version + 1, updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND status IN (${placeholders}) AND version = ? AND expires_at > ?`)
+        .bind(status, decision === "cancel" ? null : user.email, reason, approvalId, now, runId, workspaceId, ...allowedStatuses, row.version, now),
+      db.prepare(`INSERT INTO approval_envelopes
+        (id, workspace_id, run_id, plan_digest, decision, payload_json, envelope_json, signature, key_id, nonce, created_by, created_at)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1`)
+        .bind(approvalId, workspaceId, runId, row.authorization_digest, decision, canonicalJson(approvalPayload),
+          canonicalJson(signedApproval.envelope), signedApproval.signature, signedApproval.envelope.keyId,
+          signedApproval.envelope.nonce, user.email, now),
+    ], user.email, `validation.plan.${decision}d`, runId, {
+      approvalId,
+      planDigest: row.authorization_digest,
+      status,
+      reason,
+      decisionNonce: signedApproval.envelope.nonce,
+      executable: false,
+    });
+  } catch (error) {
+    // The atomic sentinel rolls back the approval and audit records when a
+    // competing decision wins. Translate only that expected race to a 409.
+    if (isAtomicMutationRejected(error)) {
+      throw new ConflictError("The plan changed or expired before this decision was committed.");
+    }
+    throw error;
+  }
   if (!result.meta.changes) throw new ConflictError("The plan changed or expired before this decision was committed.");
   return { approvalId, decision, payload: approvalPayload, integrity: signedApproval, executable: false };
 }
