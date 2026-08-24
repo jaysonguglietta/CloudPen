@@ -60,6 +60,13 @@ The integration suite builds the app, starts the built Worker on a temporary loo
 
 `.github/workflows/codeql.yml` performs JavaScript/TypeScript CodeQL analysis on pull requests, pushes to `main`, and a weekly schedule. Its actions are pinned to immutable commit SHAs, its default permissions are read-only, and only the analysis job receives `security-events: write` so results can reach GitHub code scanning. Dependabot monitors both npm and GitHub Actions dependencies; repository vulnerability alerts and automatic security updates must remain enabled.
 
+### Dependency and action update review
+
+- Run a clean `npm ci` before reviewing any grouped dependency update. Do not bypass peer conflicts with `--force` or `--legacy-peer-deps`; remove or defer the incompatible package instead.
+- Verify proposed package versions against the authoritative registry metadata and upstream release tag, then run the complete local quality gate after regenerating the lockfile.
+- Keep the CodeQL `init` and `analyze` steps pinned to the same full commit SHA. If Dependabot opens separate PRs, review them as one coupled upgrade, merge one half, refresh the other from `main`, and require a green combined CodeQL run before completing the pair.
+- TypeScript 7 is currently deferred in `.github/dependabot.yml` because the installed `typescript-eslint` peer range ends below TypeScript 6.1. Remove that guard only after the lint toolchain declares support and the full suite passes without peer overrides.
+
 ## Manual release review
 
 Automation does not replace review. Before a hosted release, confirm:

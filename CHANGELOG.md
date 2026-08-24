@@ -2,6 +2,22 @@
 
 All notable changes are documented here. CloudPen has not reached a stable public release.
 
+## Unreleased — 2026-08-24
+
+> Synthetic/private evaluation only. Production mode and cloud execution remain disabled.
+
+### Changed
+
+- Upgraded both CodeQL workflow phases to `github/codeql-action` 4.37.8 and kept `init` and `analyze` pinned to the same verified upstream commit.
+- Upgraded Next.js to 16.3.2 and compatible development tooling: `@cloudflare/vite-plugin` 1.53.1, `@cloudflare/workers-types` 5.20260821.1, `@vitejs/plugin-react` 6.1.0, Vite 8.2.2, and Wrangler 4.125.0.
+- Kept TypeScript at 6.0.3 because `typescript-eslint` 8.67.0 supports TypeScript versions below 6.1.0, and configured Dependabot to defer TypeScript 7 until that peer range expands.
+- Converted losing concurrent validation decisions into explicit `409 Conflict` responses while preserving atomic approval/audit rollback.
+
+### Security
+
+- Protected build/security, CodeQL, Dependabot configuration, and release-provenance workflows pass on the merged maintenance source.
+- Refreshed SLSA build-provenance and CycloneDX SBOM attestations for the merged source without changing the production-readiness decision or external operational gates.
+
 ## 0.2.0-rc.4 — 2026-08-12
 
 > Synthetic/private evaluation prerelease. CloudPen remains non-executable and is not approved for production tenants, real customer data, or active cloud testing.

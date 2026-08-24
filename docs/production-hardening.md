@@ -27,7 +27,7 @@ The following remain mandatory before labeling a deployment production-ready:
 1. Deploy `infra/aws-kms-signer` in the explicitly approved AWS account and region; pin its public JWK/key ARN in Sites; prove key custody, rotation, revocation, and alarms.
 2. Deploy `infra/aws-siem-collector` in the approved security-operations boundary or configure an equivalent independently administered `/v1/events` collector; prove delivery, outbox retry, alert routing, immutable retention, and credential rotation.
 3. Execute and record a D1/platform backup and restore drill against an isolated recovery project, including audit-chain and signed-manifest verification and measured RPO/RTO.
-4. Run a tagged release workflow and verify its artifact and SBOM attestations from a separate verifier context.
+4. For every promoted release, run the tagged release workflow and verify its artifact and SBOM attestations from a separate verifier context. This was completed for v0.2.0-rc.4 and must be repeated for any later candidate; prior evidence does not authorize newer source.
 5. Obtain independent application/cloud/supply-chain review. The author of controls cannot provide independent assurance.
 6. Complete the customer-hosted runner program in `runner-security-design.md` before any real AWS API execution. An approved control-plane record is not execution authority.
 

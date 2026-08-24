@@ -1,6 +1,7 @@
 # Adversarial security review
 
 - **Review date:** 2026-08-12
+- **Evidence refreshed:** 2026-08-24
 - **Scope:** repository source, migrations, Worker/API behavior, CI/release configuration, KMS signer infrastructure-as-code, and intended private Sites topology
 - **Classification:** production-hardening candidate; cloud execution remains deliberately disabled
 
@@ -10,7 +11,7 @@ CloudPen has a strong fail-closed control-plane implementation. Authentication i
 
 No confirmed remote code execution, SQL/command/template injection, SSRF through user input, stored/reflected XSS, authentication bypass in the supported Sites topology, cross-tenant access, secret retention, or cloud-credential exposure was found in this version. The web app contains no AWS execution credentials, arbitrary command channel, or runner.
 
-Production approval cannot be established from source changes alone. The KMS signer and SIEM paths are fail-closed and deployable but are not operationally evidenced in the intended external accounts. Platform backup restoration, tagged attestation verification, and independent assessment are also outstanding. `/api/admin/readiness` deliberately reports failure until mandatory runtime controls are configured.
+Production approval cannot be established from source changes alone. The KMS signer and SIEM paths are fail-closed and deployable but are not operationally evidenced in the intended external accounts. Platform backup restoration and independent assessment are also outstanding. Tagged artifact and SBOM attestations were generated and independently verified for v0.2.0-rc.4; every later promoted candidate must repeat that exact-source verification. `/api/admin/readiness` deliberately reports failure until mandatory runtime controls are configured.
 
 ## 2. System overview and trust boundaries
 
@@ -58,7 +59,7 @@ Likely attack chains include direct-origin identity-header spoofing if the dispa
 | SIEM egress | Exact HTTPS path, bearer auth, digest, timeout, no redirects, durable retry queue | Collector trust, alert routing, and immutable retention need operational proof |
 | Backup/lifecycle | Signed logical manifest, legal holds, bounded cleanup | Platform backup encryption and full restore rehearsal remain external |
 | Browser | Server-owned data, output-safe React, nonce CSP, frame/MIME/privacy headers | Inline styles allowed; authorized browser receives current page snapshot |
-| Build/release | Lockfile, audits, CodeQL, pinned actions, SBOM, deterministic artifact, attestation workflow | Tagged workflow has not yet produced/verified this candidate's attestation |
+| Build/release | Lockfile, audits, CodeQL, pinned actions, SBOM, deterministic artifact, attestation workflow | v0.2.0-rc.4 evidence was verified; each promoted commit still requires a fresh tag and independent consumer verification |
 | Runner/cloud | No channel, credential, SDK execution, or executable state | Any future enablement is a new critical boundary |
 
 ## 5. Prioritized findings
