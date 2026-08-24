@@ -8,6 +8,11 @@ updates:
     groups:
       development-tooling:
         dependency-type: development
+    ignore:
+      # typescript-eslint 8.67.0 supports TypeScript >=4.8.4 <6.1.0.
+      # Remove this guard after its peer range includes TypeScript 7.
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
     commit-message:
       prefix: deps
   - package-ecosystem: github-actions
