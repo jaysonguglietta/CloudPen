@@ -59,7 +59,7 @@ Do not include sensitive screenshots, live evidence, credentials, internal URLs,
 
 ## Dependency changes
 
-Prefer existing dependencies and standard platform APIs. New dependencies require a clear need, a maintained upstream, compatible licensing review by the repository owner, a lockfile update, and a clean `npm audit`. CI actions must be pinned to full commit SHAs.
+Prefer existing dependencies and standard platform APIs. New dependencies require a clear need, a maintained upstream, compatible licensing review by the repository owner, a lockfile update, and a clean `npm audit`. Never suppress npm peer-resolution failures to merge an update. CI actions must be pinned to full commit SHAs, and multi-step actions such as CodeQL must use one matching SHA throughout the workflow. Follow the dependency-review procedure in [Testing and release gates](./docs/testing-and-release.md#dependency-and-action-update-review).
 
 ## License and external contributions
 
