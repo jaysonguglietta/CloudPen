@@ -31,7 +31,7 @@
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.53.1",
+    "@cloudflare/vite-plugin": "^1.66.0",
     "@cloudflare/workers-types": "^5.20260821.1",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/postcss": "4.3.3",
@@ -48,7 +48,7 @@
     "typescript-eslint": "^8.67.0",
     "vinext": "^0.2.1",
     "vite": "^8.2.2",
-    "wrangler": "^4.125.0"
+    "wrangler": "^4.154.0"
   },
   "overrides": {
     "postcss": "8.5.25",
